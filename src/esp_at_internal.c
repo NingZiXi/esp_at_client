@@ -144,24 +144,24 @@ uint32_t esp_at_client_wait_ready(uint32_t timeout_ms)
     return timeout_ms;
 }
 
-static void evt_task_entry(void *arg);
-
-// 行解析 URC 转事件投递（同步派发：scheduler 损坏下 evt_task 不调度）
+// 行解析 URC 转事件投递（异步：推到 urc_queue，evt_task 异步分发）
 esp_at_err_t esp_at_client_post_event(esp_at_event_t evt, const esp_at_event_payload_t *payload)
 {
     if (!g_esp_at_client.inited) return ESP_AT_ERR_NOT_READY;
     if (evt < 0 || evt >= ESP_AT_EVENT_MAX) return ESP_AT_ERR_INVALID_ARG;
-    esp_at_event_payload_t zero = {0};
-    const esp_at_event_payload_t *src = payload ? payload : &zero;
-    esp_at_event_payload_t p = *src;
-    p.type = evt;                                    // 统一补 type，避免回调端误判
 
-    if (g_esp_at_client.cbs[evt]) {                  // 精确注册
-        g_esp_at_client.cbs[evt](&p, g_esp_at_client.cb_user[evt]);
+    // 复制 payload 到堆（evt_task 异步消费，原 stack 帧不能复用）
+    esp_at_event_payload_t *p = (esp_at_event_payload_t *)pvPortMalloc(sizeof *p);
+    if (!p) return ESP_AT_ERR_NO_MEM;
+    *p = payload ? *payload : (esp_at_event_payload_t){0};
+    p->type = evt;
+
+    BaseType_t hp = pdFALSE;
+    if (xQueueSendFromISR(g_esp_at_client.urc_queue, &p, &hp) != pdTRUE) {
+        vPortFree(p);
+        return ESP_AT_ERR_FAIL;
     }
-    if (g_esp_at_client.cbs_any) {                   // 通配
-        g_esp_at_client.cbs_any(&p, g_esp_at_client.cb_user_any);
-    }
+    portYIELD_FROM_ISR(hp);
     return ESP_AT_OK;
 }
 
@@ -277,6 +277,21 @@ static void handle_line_mqtt_urc(const char *line)
 static void handle_line_http_urc(const char *line)
 {
     if (esp_at_match_prefix(line, "+HTTPCLIENT")) {
+        // 把整行追加到 pending.resp->text，给 esp_at_http_request 拼装完整 body
+        if (g_esp_at_client.pending.resp) {
+            at_cmd_response_t *r = g_esp_at_client.pending.resp;
+            uint16_t line_len = (uint16_t)strlen(line);
+            uint16_t avail = (uint16_t)(AT_RESP_TEXT_MAX - 3 - r->text_len);
+            uint16_t copy = (line_len < avail) ? line_len : avail;
+            if (copy > 0) {
+                memcpy(r->text + r->text_len, line, copy);
+                r->text_len = (uint16_t)(r->text_len + copy);
+                r->text[r->text_len++] = '\r';
+                r->text[r->text_len++] = '\n';
+                r->text[r->text_len] = '\0';
+            }
+        }
+
         esp_at_event_payload_t p = {0};
         int size = 0;
         esp_at_extract_int(line, "+HTTPCLIENT", &size);
@@ -501,23 +516,10 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
     }
     g_esp_at_client.state = ESP_AT_STATE_WAITING;
 
-    /* scheduler 损坏：defaultTask 在 HAL_Delay 期间独占 CPU，必须自抽行跑 process_line */
-    char line[ESP_AT_LINE_MAX];
-    uint32_t deadline = HAL_GetTick() + timeout_ms;
-    while (g_esp_at_client.pending.resp != NULL && HAL_GetTick() < deadline) {
-        for (;;) {
-            int pos = ringbuffer_find_char(&g_esp_at_client.rx_rb, '\n');
-            if (pos < 0) break;
-            uint16_t copy = (uint16_t)(pos > ESP_AT_LINE_MAX - 1 ? ESP_AT_LINE_MAX - 1 : pos);
-            uint16_t got = ringbuffer_read(&g_esp_at_client.rx_rb, (uint8_t *)line, copy);
-            uint8_t drop;
-            ringbuffer_read(&g_esp_at_client.rx_rb, &drop, 1);
-            line[got] = '\0';
-            process_line(line, got);
-        }
-        HAL_Delay(5);
-    }
-    if (g_esp_at_client.pending.resp != NULL) {
+    /* 等 rx_task 解析完成（finish_pending 释放 cmd_done_sem） */
+    TickType_t ticks_to_wait = (timeout_ms == 0) ? portMAX_DELAY
+                                                    : pdMS_TO_TICKS(timeout_ms);
+    if (xSemaphoreTake(g_esp_at_client.cmd_done_sem, ticks_to_wait) != pdTRUE) {
         g_esp_at_client.pending.resp = NULL;
         g_esp_at_client.state = ESP_AT_STATE_IDLE;
         return ESP_AT_ERR_TIMEOUT;

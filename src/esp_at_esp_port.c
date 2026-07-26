@@ -61,6 +61,23 @@ void esp_at_esp_port_power_off(const esp_at_port_config_t *cfg)
     HAL_GPIO_WritePin(cfg->en_port, cfg->en_pin, GPIO_PIN_RESET);
 }
 
+// 硬复位 ESP32：拉低 EN 100ms → 拉高 → 等 boot 8s
+// 用于 ESP-AT 软死锁时从 STM32 端恢复（必须配置 en_port 才有效）
+// 无 en_port 时直接返回 OK，让调用方自己处理
+esp_at_err_t esp_at_esp_port_hard_reset(const esp_at_port_config_t *cfg, uint32_t boot_wait_ms)
+{
+    if (!cfg || !cfg->en_port) {
+        LOGW("esp_at_esp_port", "hard_reset skipped: en_port not configured");
+        return ESP_AT_OK;   // 没接 EN 引脚 = 不报错，让调用方走其他路径
+    }
+    LOGI("esp_at_esp_port", "hard_reset: EN=LOW 100ms → EN=HIGH → wait %u ms", boot_wait_ms);
+    HAL_GPIO_WritePin(cfg->en_port, cfg->en_pin, GPIO_PIN_RESET);   // EN=LOW 断电
+    HAL_Delay(100);                                                  // ≥100ms 断电
+    HAL_GPIO_WritePin(cfg->en_port, cfg->en_pin, GPIO_PIN_SET);     // EN=HIGH 上电
+    HAL_Delay(boot_wait_ms ? boot_wait_ms : 8000);                   // 等 boot
+    return ESP_AT_OK;
+}
+
 // boot 等 ready URC（简化为返回 TIMEOUT，由 esp_at_init 走 AT 探测路径）
 esp_at_err_t esp_at_esp_port_boot(const esp_at_port_config_t *cfg, uint32_t timeout_ms)
 {

@@ -54,32 +54,56 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
     }
 
     esp_at_esp_port_gpio_init(port_cfg);                           // 控制脚
-    esp_at_client_start_tasks();                                    // rx/tx/evt 任务
+    // rx_task/tx_task/evt_task 延后到 AT 探查成功后再启，否则与 HAL 同步 send_and_wait 抢 rx_rb
 
     {
-        bool probe_ok = false;                                     // AT 探查：3 次重试覆盖 WiFi 重连窗口
-        for (int i = 0; i < 3 && !probe_ok; i++) {
-            at_cmd_response_t r = {0};
-            esp_at_err_t pe = esp_at_cmd_send_sync("AT", &r, 3000);
-            if (pe == ESP_AT_OK) {
-                ESP_AT_INIT_DBG("AT probe OK (try %d)", i + 1);
+        // 5 次 HAL 同步 AT 探查：失败 → hard_reset → 再 5 次
+        char probe_buf[64];
+        bool probe_ok = false;
+        for (int i = 0; i < 5 && !probe_ok; i++) {
+            esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
+                "AT", 1500, probe_buf, sizeof probe_buf);
+            if (rc == ESP_AT_PORT_RC_OK) {
+                ESP_AT_INIT_DBG("AT probe OK (try %d, resp=%s)", i + 1, probe_buf);
                 probe_ok = true;
             } else {
-                LOGW(ESP_AT_INIT_TAG, "AT probe failed (%d) try %d/3; retrying", (int)pe, i + 1);
-                HAL_Delay(1000);
+                LOGW(ESP_AT_INIT_TAG, "AT probe failed (%d) try %d/5", (int)rc, i + 1);
+                HAL_Delay(500);
+            }
+        }
+        // 5 次全失败 → ESP32 大概率软死锁；如果 en_port 已配置 → 硬复位 + 再轮询
+        if (!probe_ok && s_port_cfg->en_port) {
+            LOGW(ESP_AT_INIT_TAG, "probes failed → hard reset via EN");
+            esp_at_esp_port_hard_reset(s_port_cfg, 8000);
+            for (int i = 0; i < 5 && !probe_ok; i++) {
+                esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
+                    "AT", 1500, probe_buf, sizeof probe_buf);
+                if (rc == ESP_AT_PORT_RC_OK) {
+                    LOGI(ESP_AT_INIT_TAG, "AT probe OK after hard_reset (try %d)", i + 1);
+                    probe_ok = true;
+                } else {
+                    LOGW(ESP_AT_INIT_TAG, "post-reset probe failed (%d) try %d/5", (int)rc, i + 1);
+                    HAL_Delay(500);
+                }
             }
         }
     }
 
+    // ATE0 关回显：HAL 同步发送（rx_task 还没启）
     {
-        at_cmd_response_t r = {0};                                 // ATE0 关回显（默认 ATE1 会扰乱行解析）
-        esp_at_err_t ae = esp_at_cmd_send_sync("ATE0", &r, 2000);
-        if (ae == ESP_AT_OK) {
+        char ate_buf[64];
+        esp_at_port_rc_t ae = esp_at_port_uart_send_and_wait(
+            "ATE0", 1500, ate_buf, sizeof ate_buf);
+        if (ae == ESP_AT_PORT_RC_OK) {
             ESP_AT_INIT_DBG("echo disabled (ATE0)");
         } else {
             LOGW(ESP_AT_INIT_TAG, "ATE0 failed (%d); continuing anyway", (int)ae);
         }
     }
+
+    // 探查 + ATE0 全部 HAL 同步后才启 task，ringbuffer 干净
+    esp_at_client_start_tasks();                                    // rx/tx/evt 任务
+
     LOGI(ESP_AT_INIT_TAG, "esp_at_init done");
     return ESP_AT_OK;
 }

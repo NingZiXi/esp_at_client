@@ -43,6 +43,18 @@ void          esp_at_esp_port_reset    (const esp_at_port_config_t *cfg);
 void          esp_at_esp_port_power_off(const esp_at_port_config_t *cfg);
 
 /**
+ * @brief ESP32 硬复位（拉低 EN 100ms → 拉高 → 等 boot）
+ *
+ * 用于 ESP-AT 软死锁时从 STM32 端恢复。
+ * cfg->en_port 为 NULL 时跳过（不报错），调用方需自己处理。
+ *
+ * @param cfg           端口配置
+ * @param boot_wait_ms   复位后等待 boot 时间（0 → 默认 8000ms）
+ * @return ESP_AT_OK / ERR_INVALID_ARG
+ */
+esp_at_err_t  esp_at_esp_port_hard_reset(const esp_at_port_config_t *cfg, uint32_t boot_wait_ms);
+
+/**
  * @brief boot 等 ready URC（当前简化为返回 TIMEOUT，由 esp_at_init 走 AT 探测路径）
  *
  * @param cfg         端口配置

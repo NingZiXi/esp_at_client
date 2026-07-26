@@ -73,6 +73,8 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
     }
 
     int transport = strcmp(scheme, "https") == 0 ? 2 : 1;
+    LOGI(ESP_AT_HTTP_TAG, "send scheme=%s host=%s path=%s ct=%d transport=%d",
+         scheme, host, path, ct, transport);
 
     char line[512];
     at_cmd_response_t r = {0};
@@ -81,21 +83,32 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
     // >200B URL 改走 AT+HTTPURLCFG 预存；当前简化直接传 url
     (void)HTTP_URL_PRESET_THRESHOLD;
 
+    // ESP-AT 4.1.x HTTPCLIENT：url 必须用双引号（否则 AT parser 把 : / 当成字段分隔符）
     if (method == ESP_AT_HTTP_GET || method == ESP_AT_HTTP_HEAD) {
         n = snprintf(line, sizeof line,
-                     "AT+HTTPCLIENT=%d,%d,%s,%s,%s,%d",
-                     (int)method, ct, url, host, path, transport);
+                     "AT+HTTPCLIENT=%d,%d,\"%s\",,,%d",
+                     (int)method, ct, url, transport);
     } else if (body && body_len > 0) {
+        // data 里的双引号需要转义（\"），否则 AT parser 会切断字段
+        char escaped[256];
+        size_t ei = 0;
+        for (size_t bi = 0; bi < body_len && ei + 2 < sizeof escaped; bi++) {
+            if (((const char *)body)[bi] == '"') {
+                escaped[ei++] = '\\';
+            }
+            escaped[ei++] = ((const char *)body)[bi];
+        }
+        escaped[ei] = '\0';
         n = snprintf(line, sizeof line,
-                     "AT+HTTPCLIENT=%d,%d,%s,%s,%s,%d,\"%.*s\"",
-                     (int)method, ct, url, host, path, transport,
-                     (int)body_len, (const char *)body);
+                     "AT+HTTPCLIENT=%d,%d,\"%s\",,,%d,\"%s\"",
+                     (int)method, ct, url, transport, escaped);
     } else {
         n = snprintf(line, sizeof line,
-                     "AT+HTTPCLIENT=%d,%d,%s,%s,%s,%d",
-                     (int)method, ct, url, host, path, transport);
+                     "AT+HTTPCLIENT=%d,%d,\"%s\",,,%d",
+                     (int)method, ct, url, transport);
     }
     (void)n;
+    LOGI(ESP_AT_HTTP_TAG, "AT cmd: %s", line);
 
     esp_at_err_t e = esp_at_client_send_sync(line, &r, timeout_ms);
     if (e != ESP_AT_OK) {
@@ -103,20 +116,23 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
         return e;
     }
 
-    // 多帧 +HTTPCLIENT:<size>,<data>，这里只取最后一帧（完整拼接留下一版）
-    char *comma = strrchr(r.text, ',');
-    if (comma) {
-        int sz = atoi(comma + 1);
-        if (sz > 0 && sz < 4096) {
+    // +HTTPCLIENT:<size>,<body>：ESP-AT 只透传 body（status line + headers 已被内部解析），resp->status 留 0
+    // TODO: 长 body 多帧拼接
+    const char *p_hdr = strstr(r.text, "+HTTPCLIENT:");
+    if (p_hdr) {
+        const char *p_sz = p_hdr + strlen("+HTTPCLIENT:");
+        int sz = atoi(p_sz);
+        const char *comma = strchr(p_hdr, ',');
+        const char *body_start = comma ? comma + 1 : NULL;
+        if (sz > 0 && sz < 4096 && body_start) {
             resp->body = (uint8_t *)pvPortMalloc((uint16_t)(sz + 1));
             if (resp->body) {
-                memcpy(resp->body, comma + 1, (uint16_t)sz);
+                memcpy(resp->body, body_start, (uint16_t)sz);
                 resp->body[sz] = '\0';
                 resp->body_len = (uint16_t)sz;
             }
         }
     }
-    resp->status = 200;                               // TODO: 解析响应头第一行
     resp->elapsed_ms = r.elapsed_ms;
     return ESP_AT_OK;
 }
