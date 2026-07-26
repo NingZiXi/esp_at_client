@@ -90,9 +90,17 @@ void app_esp_at_http_demo_run(const esp_at_port_config_t *port_cfg)
         LOGE(TAG, "wifi_init failed");
         return;
     }
-    if (esp_at_wifi_connect(DEMO_WIFI_SSID, DEMO_WIFI_PSK, 15000) != ESP_AT_OK) {
-        LOGE(TAG, "wifi_connect failed");
-        return;
+
+    // ESP32-C3 上电会自动重连：已 GOT_IP 就别 CWJAP，避免踢掉刚拿的 IP
+    esp_at_wifi_query_t q = {0};
+    if (esp_at_wifi_query_state(&q, 1500) != ESP_AT_OK
+        || q.state != ESP_AT_WIFI_GOT_IP) {
+        if (esp_at_wifi_connect(DEMO_WIFI_SSID, DEMO_WIFI_PSK, 15000) != ESP_AT_OK) {
+            LOGE(TAG, "wifi_connect failed");
+            return;
+        }
+    } else {
+        LOGI(TAG, "ESP32 already GOT_IP (ssid=%s), skip CWJAP", q.ssid);
     }
 
     run_http_get();

@@ -180,3 +180,15 @@ esp_at_err_t esp_at_cmd_send_only(const char *cmd_line, uint32_t timeout_ms)
     vPortFree(buf);
     return (rc < 0) ? ESP_AT_ERR_FAIL : ESP_AT_OK;
 }
+
+// 读 ESP-AT 固件版本（AT+GMR）
+esp_at_err_t esp_at_client_get_version(char *out, uint16_t out_sz, uint32_t timeout_ms)
+{
+    if (!out || out_sz < 16) return ESP_AT_ERR_INVALID_ARG;
+    at_cmd_response_t r = {0};
+    esp_at_err_t e = esp_at_cmd_send_sync("AT+GMR", &r, timeout_ms);
+    if (e != ESP_AT_OK) return e;
+    strncpy(out, r.text, out_sz - 1);
+    out[out_sz - 1] = '\0';
+    return ESP_AT_OK;
+}

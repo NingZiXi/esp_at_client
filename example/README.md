@@ -78,6 +78,7 @@ esp_at_register_event_cb(ESP_AT_EVENT_ANY, cb, user);      // 通配事件回调
 ```c
 esp_at_wifi_init(mode);                                    // 1=STA 2=AP 3=STA+AP
 esp_at_wifi_connect(ssid, pwd, timeout_ms);
+esp_at_wifi_query_state(&q, timeout_ms);                   // 主动 AT+CWSTATE?（推荐先探后连）
 esp_at_wifi_get_ip(ip, gw, mask);
 ```
 

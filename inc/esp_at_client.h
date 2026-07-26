@@ -74,6 +74,19 @@ esp_at_err_t       esp_at_cmd_send_sync (const char *cmd_line,
  */
 esp_at_err_t       esp_at_cmd_send_only (const char *cmd_line, uint32_t timeout_ms);
 
+/**
+ * @brief 读 ESP-AT 固件版本（AT+GMR）
+ *
+ * 走 rx_task 派发路径，可用于 boot 后诊断。
+ * 响应文本（AT version / SDK version / Bin version / compile time 多行）原样填到 out。
+ *
+ * @param out          输出缓冲
+ * @param out_sz       输出缓冲大小（>=16）
+ * @param timeout_ms   超时（ms，0 = ESP_AT_CMD_TIMEOUT_DEFAULT_MS）
+ * @return ESP_AT_OK / ERR_*
+ */
+esp_at_err_t       esp_at_client_get_version(char *out, uint16_t out_sz, uint32_t timeout_ms);
+
 #else  /* ESP_AT_ENABLE */
 
 static inline esp_at_err_t esp_at_init(const esp_at_port_config_t *cfg) { (void)cfg; return ESP_AT_OK; }

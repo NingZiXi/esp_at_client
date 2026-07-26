@@ -203,8 +203,12 @@ esp_at_port_rc_t esp_at_port_uart_send_and_wait(const char *cmd_line,
 
 done:
     out_buf[pos] = '\0';
-    if (busy_seen && rc == ESP_AT_PORT_RC_TIMEOUT) {      // 超时但看到 busy → ERROR 语义
+    if (busy_seen && rc == ESP_AT_PORT_RC_TIMEOUT) {
         rc = ESP_AT_PORT_RC_ERROR;
+    }
+    if (rc == ESP_AT_PORT_RC_TIMEOUT && pos == 0) {   
+        LOGW("hal_at", "TIMEOUT with 0 bytes — dump rx_rb:");
+        esp_at_port_uart_rx_dump();
     }
     LOGI("hal_at", "rc=%d, resp=%u bytes", (int)rc, (unsigned)pos);
     if (pos > 0 && pos < 200) {

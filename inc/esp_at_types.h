@@ -80,12 +80,13 @@ typedef struct {
 // 事件回调签名
 typedef void (*esp_at_event_cb_t)(const esp_at_event_payload_t *e, void *user);
 
-// WiFi 状态
+// WiFi 状态（cached + AT+CWSTATE? 两路都用）
 typedef enum {
     ESP_AT_WIFI_IDLE          = 0,
-    ESP_AT_WIFI_CONNECTED     = 1,   // WIFI CONNECTED 已收
-    ESP_AT_WIFI_GOT_IP        = 2,   // WIFI GOT IP 已收
-    ESP_AT_WIFI_LOST          = 3,   // WIFI DISCONNECT 已收
+    ESP_AT_WIFI_CONNECTING    = 1,   // 仅 AT+CWSTATE? 反映（ESP32 正在 join）
+    ESP_AT_WIFI_CONNECTED     = 2,   // WIFI CONNECTED URC 已收
+    ESP_AT_WIFI_GOT_IP        = 3,   // WIFI GOT IP URC 已收
+    ESP_AT_WIFI_LOST          = 4,   // WIFI DISCONNECT URC 已收 / AT+CWSTATE? 4（disconnecting）
 } esp_at_wifi_state_t;
 
 #endif /* ESP_AT_TYPES_H */

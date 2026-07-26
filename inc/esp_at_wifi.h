@@ -10,6 +10,12 @@
 
 #if ESP_AT_ENABLE
 
+// AT+CWSTATE? 查询结果
+typedef struct {
+    esp_at_wifi_state_t state;     // ESP32 实际状态
+    char               ssid[33];   // 仅 state>=1 有意义；\0 结尾
+} esp_at_wifi_query_t;
+
 /**
  * @brief 设置 WiFi 模式
  *
@@ -36,11 +42,27 @@ esp_at_err_t         esp_at_wifi_connect(const char *ssid, const char *pwd, uint
 esp_at_err_t         esp_at_wifi_disconnect(void);
 
 /**
- * @brief 查询当前 WiFi 状态
+ * @brief 查询当前 WiFi 状态（cached，URC 驱动更新）
+ *
+ * 警告：STM32 boot 之前 ESP32 自动重连的 URC 可能丢失，
+ * boot 后立即调用返回 ESP_AT_WIFI_IDLE，但 ESP32 实际已 GOT_IP。
+ * 需要权威值请用 esp_at_wifi_query_state()。
  *
  * @return esp_at_wifi_state_t
  */
 esp_at_wifi_state_t  esp_at_wifi_get_state(void);
+
+/**
+ * @brief 主动发 AT+CWSTATE? 查 ESP32 当前状态（不依赖 cached URC）
+ *
+ * 用于 boot 后立即判断 ESP32 是否已自动重连上 AP，
+ * 避免对已连的 ESP32 主动 CWJAP 打断内部状态机。
+ *
+ * @param q          状态填充
+ * @param timeout_ms 超时
+ * @return ESP_AT_OK / ERR_TIMEOUT / ERR_RESP
+ */
+esp_at_err_t         esp_at_wifi_query_state(esp_at_wifi_query_t *q, uint32_t timeout_ms);
 
 /**
  * @brief 查询 IP / 网关 / 子网掩码（CIPSTA?）

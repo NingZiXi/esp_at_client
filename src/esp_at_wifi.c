@@ -60,6 +60,42 @@ esp_at_wifi_state_t esp_at_wifi_get_state(void)
     return esp_at_client_get()->wifi_state;
 }
 
+// 主动发 AT+CWSTATE? 查 ESP32 当前状态（不依赖 cached URC）
+esp_at_err_t esp_at_wifi_query_state(esp_at_wifi_query_t *q, uint32_t timeout_ms)
+{
+    if (!q) return ESP_AT_ERR_INVALID_ARG;
+    memset(q, 0, sizeof *q);
+
+    at_cmd_response_t r = {0};
+    esp_at_err_t e = esp_at_client_send_sync("AT+CWSTATE?", &r, timeout_ms);
+    if (e != ESP_AT_OK) {
+        LOGW(ESP_AT_WIFI_TAG, "CWSTATE? failed: %d", (int)e);
+        return e;
+    }
+
+    // +CWSTATE:<state>,"<ssid>"
+    const char *p = strstr(r.text, "+CWSTATE:");
+    if (!p) return ESP_AT_ERR_RESP;
+    p += strlen("+CWSTATE:");
+    int state = (int)strtol(p, NULL, 10);
+    if (state < 0 || state > (int)ESP_AT_WIFI_LOST) return ESP_AT_ERR_RESP;
+    q->state = (esp_at_wifi_state_t)state;
+
+    // SSID 在 , 后的第一个 "..." 里
+    const char *q1 = strchr(p, ',');
+    if (q1) {
+        const char *q2 = strchr(q1 + 1, '"');
+        const char *q3 = q2 ? strchr(q2 + 1, '"') : NULL;
+        if (q2 && q3 && q3 > q2 + 1) {
+            size_t len = (size_t)(q3 - q2 - 1);
+            if (len >= sizeof q->ssid) len = sizeof q->ssid - 1;
+            memcpy(q->ssid, q2 + 1, len);
+            q->ssid[len] = '\0';
+        }
+    }
+    return ESP_AT_OK;
+}
+
 // 查询 IP / GW / MASK（CIPSTA? 响应多行：ip / gateway / netmask）
 esp_at_err_t esp_at_wifi_get_ip(char ip[16], char gw[16], char mask[16])
 {
