@@ -12,6 +12,9 @@
 
 #include "stm_log.h"
 
+// CMSIS-RTOS 2 API：HAL_Delay 不让出 CPU 时用它让出
+extern void osDelay(uint32_t ms);
+
 #define ESP_AT_MQTT_TAG "mqtt"
 
 // MQTT 初始化（占位）
@@ -50,7 +53,7 @@ esp_at_err_t esp_at_mqtt_connect(const esp_at_mqtt_user_cfg_t *uc,
     }
     LOGI(ESP_AT_MQTT_TAG, "USERCFG ok");
 
-    HAL_Delay(200);                                                            // 模块状态机切换余量
+    osDelay(200);                                                              // 模块状态机切换余量
 
     uint16_t keepalive = cc ? cc->timeout_s : uc->keepalive_s;
     if (keepalive == 0) keepalive = uc->keepalive_s ? uc->keepalive_s : 120;   // ESP 强制默认 120s

@@ -55,7 +55,7 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
         extern esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms);
         esp_at_port_uart_transmit((const uint8_t *)rst, 8, 1000);
         LOGI(ESP_AT_INIT_TAG, "AT+RST sent, waiting 5s for boot");
-        HAL_Delay(5000);                                            // 等 boot + 自动重连 WiFi
+        HAL_Delay(3000);                                            // 等 boot + 自动重连 WiFi
         ringbuffer_discard(&g_esp_at_client.rx_rb,                 // 清 boot 期间的杂数据
                            ringbuffer_available(&g_esp_at_client.rx_rb));
     }
@@ -65,19 +65,23 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
     {
         char probe_buf[64];
         bool probe_ok = false;
-        esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
-            "AT", 1500, probe_buf, sizeof probe_buf);
-        if (rc == ESP_AT_PORT_RC_OK) {
-            LOGI(ESP_AT_INIT_TAG, "AT probe OK (resp=%s)", probe_buf);
-            probe_ok = true;
-        } else {
-            LOGW(ESP_AT_INIT_TAG, "AT probe failed (%d)", (int)rc);
+        // 3 次 AT 探针
+        for (int i = 0; i < 3 && !probe_ok; i++) {
+            esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
+                "AT", 1500, probe_buf, sizeof probe_buf);
+            if (rc == ESP_AT_PORT_RC_OK) {
+                LOGI(ESP_AT_INIT_TAG, "AT probe OK (try %d, resp=%s)", i + 1, probe_buf);
+                probe_ok = true;
+            } else {
+                LOGW(ESP_AT_INIT_TAG, "AT probe failed (%d) try %d/3", (int)rc, i + 1);
+            }
         }
 
         if (!probe_ok && s_port_cfg->en_port) {
-            LOGW(ESP_AT_INIT_TAG, "probe failed → hard reset via EN");
+            LOGW(ESP_AT_INIT_TAG, "3 probes failed → hard reset via EN");
             esp_at_esp_port_hard_reset(s_port_cfg, 8000);
-            rc = esp_at_port_uart_send_and_wait("AT", 1500, probe_buf, sizeof probe_buf);
+            esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
+                "AT", 1500, probe_buf, sizeof probe_buf);
             if (rc == ESP_AT_PORT_RC_OK) {
                 LOGI(ESP_AT_INIT_TAG, "AT probe OK after hard_reset (resp=%s)", probe_buf);
             } else {
