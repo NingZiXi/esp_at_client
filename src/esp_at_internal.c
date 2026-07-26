@@ -22,6 +22,11 @@
 #include "stm_log.h"
 
 #define ESP_AT_LOG_TAG  "at_client"
+#if ESP_AT_LOG_LEVEL >= 5
+#define ESP_AT_LOGV(fmt, ...) LOGV(ESP_AT_LOG_TAG, fmt, ##__VA_ARGS__)
+#else
+#define ESP_AT_LOGV(...) do {} while (0)
+#endif
 #if ESP_AT_LOG_LEVEL >= 4
 #define ESP_AT_LOGD(fmt, ...) LOGD(ESP_AT_LOG_TAG, fmt, ##__VA_ARGS__)
 #else
@@ -41,12 +46,6 @@
 #define ESP_AT_LOGE(fmt, ...) LOGE(ESP_AT_LOG_TAG, fmt, ##__VA_ARGS__)
 #else
 #define ESP_AT_LOGE(...) do {} while (0)
-#endif
-
-#if ESP_AT_DEBUG_LOG
-#define ESP_AT_DBG(fmt, ...)     LOGI(ESP_AT_LOG_TAG, fmt, ##__VA_ARGS__)
-#else
-#define ESP_AT_DBG(...)          do {} while (0)
 #endif
 
 esp_at_client_t g_esp_at_client;
@@ -230,7 +229,6 @@ static void handle_line_mqtt_urc(const char *line)
     if (esp_at_match_prefix(line, "+MQTTSUBRECV")) {
         /* +MQTTSUBRECV:<link>,"<topic>",<len>,<data>
          * 数据末尾与 len 之间是倒数第二个逗号——直接 strrchr 会拿到 data 段 */
-        ESP_AT_DBG("SUBRECV: line=[%s]", line);
         int link = 0;
         esp_at_extract_int(line, "+MQTTSUBRECV", &link);
         p.link_id = link;
@@ -261,10 +259,6 @@ static void handle_line_mqtt_urc(const char *line)
         }
 
         if (q2) *(char *)q2 = '\0';                 // 让 topic 终止，data 用 %.*s 限长打印
-        ESP_AT_DBG("SUBRECV: topic=[%.*s] len=%u data=[%.*s]",
-                   p.topic_len, p.topic ? p.topic : "",
-                   p.data_len,
-                   p.data_len, p.data ? (const char *)p.data : "");
         esp_at_client_post_event(ESP_AT_EVENT_MQTT_MESSAGE, &p);
         return;
     }
@@ -352,7 +346,7 @@ static void process_line(char *line, uint16_t len)
     trim_cr(line, &len);
     if (len == 0) return;
 
-    ESP_AT_DBG(">> %s", line);
+    LOGD(ESP_AT_PROTO_TAG, ">> %s", line);
 
     if (strcmp(line, "ready") == 0) {
         handle_line_ready(line);
@@ -507,7 +501,7 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
     buf[cmd_len]     = '\r';
     buf[cmd_len + 1] = '\n';
 
-    ESP_AT_LOGD("<< %s", cmd_line);
+    LOGV(ESP_AT_PROTO_TAG, "<< %s", cmd_line);
     int rc = ESP_AT_LINK_WRITE(g_esp_at_client.link, buf, total, timeout_ms);
     vPortFree(buf);
     if (rc < 0) {

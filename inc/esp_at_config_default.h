@@ -11,14 +11,15 @@
 #define ESP_AT_ENABLE            1
 #endif
 
-// 0=off 1=err 2=warn 3=info 4=debug
+// 0=off 1=err 2=warn 3=info 4=debug 5=verbose（每条 AT 命令 / 每行 URC）
 #ifndef ESP_AT_LOG_LEVEL
 #define ESP_AT_LOG_LEVEL         3
 #endif
 
-// 关键路径调试日志（独立于 ESP_AT_LOG_LEVEL）
-#ifndef ESP_AT_DEBUG_LOG
-#define ESP_AT_DEBUG_LOG         0
+// at_comms tag per-tag 提级别开关：1=启动时把 at_comms 提到 VERBOSE（看 << / >>）
+// 0=显式关。未定义时不动 at_comms（全走全局默认）
+#ifndef ESP_AT_COMMS_VERBOSE_LOG
+#define ESP_AT_COMMS_VERBOSE_LOG 0
 #endif
 
 #ifndef ESP_AT_UART_RX_BUF_SZ

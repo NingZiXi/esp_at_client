@@ -35,7 +35,36 @@ target_link_libraries(your_app PRIVATE esp_at_client)
 
 依赖：`stm32cubemx` target（CubeMX 生成的 HAL/FreeRTOS/CMSIS）、USART2 + 两路 DMA（CubeMX 配置好）、[stm_log](https://github.com/NingZiXi/stm_log)（日志后端，必需）。
 
-用户配置覆盖：在工程根 `main/esp_at_config_user.h` 里 `#define` 重新定义宏即可，CMake 会自动 `-include` 注入。
+### 用户配置覆盖
+
+`main/esp_at_config_user.h` **默认不存在**——库自动 `-include` 这个文件,有就 inject、没就 fallback 到 default。
+
+要覆盖某个宏时：
+
+```c
+/**
+ * @file    esp_at_config_user.h
+ * @brief   项目级用户配置
+ */
+
+#ifndef ESP_AT_CONFIG_USER_H
+#define ESP_AT_CONFIG_USER_H
+
+// 例：把任务栈调大
+#undef ESP_AT_TASK_RX_STACK
+#define ESP_AT_TASK_RX_STACK    1024
+
+// 例：打开 at_comms tag VERBOSE 级，看 << / >>
+#undef ESP_AT_COMMS_VERBOSE_LOG
+#define ESP_AT_COMMS_VERBOSE_LOG 1
+
+#endif /* ESP_AT_CONFIG_USER_H */
+```
+
+要点：
+- 用 `#undef + #define` **显式覆盖**——`default.h` 已经 `#define`，不能用 `#ifndef` 跳过
+- 想看有哪些可覆盖宏，看 [esp_at_config_default.h](inc/esp_at_config_default.h)
+- 新加的宏用 `#ifndef` 模式（只有 user.h 给默认）
 
 ## 最小示例
 
@@ -75,8 +104,27 @@ void app_main(void) {
 
 更完整的 demo（MQTT / event callback 等）见 [example/](example/)。
 
-## 已知坑
+## 日志
 
-1. **ESP32-C3 上电自动重连 → 别主动 CWJAP**。已 GOT_IP 时主动 CWJAP 会踢掉刚拿的 IP，触发 `WIFI DISCONNECT`。用 `esp_at_wifi_query_state()` 探一下，已连就跳过；`esp_at_wifi_get_state()` 是 cached，boot 后立即调不准。
-2. **`esp_at_port_uart_send_and_wait` 只在 boot 期用**。任务起来后跟 `rx_task` 抢同一个 ringbuffer，响应会被偷走。任务起来后用 `esp_at_cmd_send_sync` / 各服务封装（`esp_at_wifi_*` 等）。
-3. **HTTP `resp.status` 永远是 0**。ESP-AT `+HTTPCLIENT:<size>,<body>` 内部解析掉了 status line，只透传 body，判定成功看 body 内容。
+5 档对齐 stm_log：`ESP_AT_LOG_LEVEL` = 0=off 1=err 2=warn 3=info 4=debug 5=verbose（默认 3）。
+
+AT 通信细节统一打 `at_comms` tag，前缀 `<<` 是 MCU 发出，`>>` 是 ESP32 回的（一律原始数据）：
+
+```
+I demo: GET ... status=200 ...
+D at_comms: << AT+HTTPCLIENT=2,0,"http://..."
+D at_comms: >> +HTTPCLIENT:32,hello from stm_ota_server GET /
+V at_comms: << rc=0, resp=37 bytes
+V at_comms: >> echo POST /post ok, received 5 bytes
+```
+
+stm_log 的 per-tag 级别**覆盖**全局（见 stm_log.c 的 `resolve_level`）—— 调试时只开 `at_comms` 不影响其他 tag：
+
+```c
+esp_at_log_set_tag_level("at_comms", STM_LOG_LVL_DEBUG);   // 开 << / >>
+esp_at_log_set_tag_level("at_comms", STM_LOG_LVL_NONE);    // 全关
+esp_at_log_unset_tag_level("at_comms");                    // 恢复全局默认
+esp_at_log_set_level(STM_LOG_LVL_DEBUG);                   // 一次性升全局
+```
+
+调试完无需动 config：per-tag 设完即生效，重启后由 `esp_at_log_set_tag_level` 调用恢复。

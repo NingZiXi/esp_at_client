@@ -8,6 +8,7 @@
 
 #include "esp_at_types.h"
 #include "esp_at_port_stm32.h"
+#include "stm_log.h"
 
 #if ESP_AT_ENABLE
 
@@ -86,6 +87,28 @@ esp_at_err_t       esp_at_cmd_send_only (const char *cmd_line, uint32_t timeout_
  * @return ESP_AT_OK / ERR_*
  */
 esp_at_err_t       esp_at_client_get_version(char *out, uint16_t out_sz, uint32_t timeout_ms);
+
+/**
+ * @brief 切换全局默认日志级别（不影响 per-tag 设置）
+ *
+ * @param level  stm_log_level_t（NONE/ERROR/WARN/INFO/DEBUG/VERBOSE）
+ */
+void               esp_at_log_set_level(stm_log_level_t level);
+
+/**
+ * @brief 注册 / 更新某 tag 的级别（NONE = 静音该 tag 所有输出）
+ *
+ * @param tag    模块 tag（如 "at_client" / "rx_dump" / "hal_at"）
+ * @param level  stm_log_level_t
+ */
+void               esp_at_log_set_tag_level(const char *tag, stm_log_level_t level);
+
+/**
+ * @brief 删除某 tag 的 per-tag 配置（让该 tag 回退到全局默认）
+ *
+ * @param tag  模块 tag
+ */
+void               esp_at_log_unset_tag_level(const char *tag);
 
 #else  /* ESP_AT_ENABLE */
 

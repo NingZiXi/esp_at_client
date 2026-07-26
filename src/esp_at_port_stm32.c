@@ -111,7 +111,6 @@ void esp_at_port_uart_rx_dump(void)
     extern esp_at_client_t g_esp_at_client;
     ringbuffer_t *rb = &g_esp_at_client.rx_rb;
     uint16_t avail = ringbuffer_available(rb);
-    LOGI("rx_dump", "available=%u", avail);
     if (avail == 0) return;
 
     uint8_t buf[256];
@@ -129,8 +128,8 @@ void esp_at_port_uart_rx_dump(void)
     }
     hex[hx] = '\0';
     asc[ac] = '\0';
-    LOGI("rx_dump", "hex: %s", hex);
-    LOGI("rx_dump", "asc: %s", asc);
+    LOGD(ESP_AT_PROTO_TAG, ">> hex[%u]: %s", avail, hex);
+    LOGD(ESP_AT_PROTO_TAG, ">> asc[%u]: %s", avail, asc);
 }
 
 // HAL 同步发送：scheduler 损坏环境下的同步发送兜底（HAL_Delay 不依赖 FreeRTOS tick）
@@ -153,7 +152,7 @@ esp_at_port_rc_t esp_at_port_uart_send_and_wait(const char *cmd_line,
     tx_buf[cmd_len]     = '\r';
     tx_buf[cmd_len + 1] = '\n';
 
-    LOGI("hal_at", "TX: %s", cmd_line);
+    LOGV(ESP_AT_PROTO_TAG, "<< %s", cmd_line);
     HAL_StatusTypeDef st = HAL_UART_Transmit(s_huart, tx_buf, cmd_len + 2,
                                              (uint16_t)(wait_ms ? wait_ms : 1000));
     vPortFree(tx_buf);
@@ -206,13 +205,13 @@ done:
     if (busy_seen && rc == ESP_AT_PORT_RC_TIMEOUT) {
         rc = ESP_AT_PORT_RC_ERROR;
     }
-    if (rc == ESP_AT_PORT_RC_TIMEOUT && pos == 0) {   
+    if (rc == ESP_AT_PORT_RC_TIMEOUT && pos == 0) {
         LOGW("hal_at", "TIMEOUT with 0 bytes — dump rx_rb:");
         esp_at_port_uart_rx_dump();
     }
-    LOGI("hal_at", "rc=%d, resp=%u bytes", (int)rc, (unsigned)pos);
+    LOGD(ESP_AT_PROTO_TAG, "<< rc=%d, resp=%u bytes", (int)rc, (unsigned)pos);
     if (pos > 0 && pos < 200) {
-        LOGI("hal_at", "resp: %s", out_buf);
+        LOGD(ESP_AT_PROTO_TAG, ">> %s", out_buf);
     } else if (pos >= 200) {                              // 长响应：截 head 64 字节
         char head[200];
         uint16_t n = (pos > 64) ? 64 : pos;
@@ -220,7 +219,7 @@ done:
             head[i] = out_buf[i];
         }
         head[n] = '\0';
-        LOGI("hal_at", "resp-head: %s", head);
+        LOGD(ESP_AT_PROTO_TAG, ">> resp-head[%u]: %s", pos, head);
     }
     return rc;
 }

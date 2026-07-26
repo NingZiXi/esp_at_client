@@ -82,7 +82,7 @@ void app_esp_at_mqtt_demo_run(const esp_at_port_config_t *port_cfg)
         return;
     }
 
-    // ESP32-C3 上电会自动重连：已 GOT_IP 就别 CWJAP，避免踢掉刚拿的 IP
+    // ESP32-C3 上电会自动重连：已 GOT_IP 时跳过 CWJAP
     esp_at_wifi_query_t q = {0};
     if (esp_at_wifi_query_state(&q, 1500) != ESP_AT_OK
         || q.state != ESP_AT_WIFI_GOT_IP) {
@@ -124,7 +124,7 @@ void app_esp_at_mqtt_demo_run(const esp_at_port_config_t *port_cfg)
         LOGI(TAG, "subscribed to %s", DEMO_MQTT_TOPIC_SUB);
     }
 
-    // 周期 publish：2 秒一帧；osDelay 让出 CPU 给 rx_task / evt_task 异步处理 URC
+    // 周期 publish：2 秒一帧
     uint32_t tick = 0;
     for (;;) {
         char payload[64];

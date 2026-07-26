@@ -72,6 +72,9 @@ typedef struct esp_at_client {
     EventGroupHandle_t boot_eg;
 #define BOOT_READY_BIT  (1u << 0)
 
+// AT 通信细节统一 tag：所有 << TX / >> RX 原始数据用此
+#define ESP_AT_PROTO_TAG "at_comms"
+
     esp_at_event_cb_t cbs[ESP_AT_EVENT_MAX];     // cbs[evt]，evt==ESP_AT_EVENT_MAX 时 NULL
     void             *cb_user[ESP_AT_EVENT_MAX];
 

@@ -14,18 +14,25 @@
 
 #define ESP_AT_INIT_TAG "esp_at_init"
 
-#if ESP_AT_DEBUG_LOG
-#define ESP_AT_INIT_DBG(fmt, ...)  LOGI(ESP_AT_INIT_TAG, fmt, ##__VA_ARGS__)
-#else
-#define ESP_AT_INIT_DBG(...)       do {} while (0)
-#endif
-
 static const esp_at_port_config_t *s_port_cfg;
+
+// 按用户 config 宏应用库内 tag 日志级别
+static void apply_log_config_from_macros(void)
+{
+#ifdef ESP_AT_COMMS_VERBOSE_LOG
+#  if ESP_AT_COMMS_VERBOSE_LOG
+    esp_at_log_set_tag_level("at_comms", STM_LOG_LVL_VERBOSE);
+#  else
+    esp_at_log_set_tag_level("at_comms", STM_LOG_LVL_NONE);
+#  endif
+#endif
+}
 
 // 初始化 ESP-AT 客户端
 esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
 {
     if (!port_cfg) return ESP_AT_ERR_INVALID_ARG;
+    apply_log_config_from_macros();
     s_port_cfg = port_cfg;
 
     esp_at_link_t *link = esp_at_uart_link_create(                 // 创建 link（UART）
@@ -47,44 +54,34 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
         const char *rst = "AT+RST\r\n";                            // 软件复位：清 MQTT 残留 / WiFi 卡死
         extern esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms);
         esp_at_port_uart_transmit((const uint8_t *)rst, 8, 1000);
-        ESP_AT_INIT_DBG("AT+RST sent, waiting 5s for boot");
+        LOGI(ESP_AT_INIT_TAG, "AT+RST sent, waiting 5s for boot");
         HAL_Delay(5000);                                            // 等 boot + 自动重连 WiFi
         ringbuffer_discard(&g_esp_at_client.rx_rb,                 // 清 boot 期间的杂数据
                            ringbuffer_available(&g_esp_at_client.rx_rb));
     }
 
     esp_at_esp_port_gpio_init(port_cfg);                           // 控制脚
-    // rx_task/tx_task/evt_task 延后到 AT 探查成功后再启，否则与 HAL 同步 send_and_wait 抢 rx_rb
 
     {
-        // 5 次 HAL 同步 AT 探查：失败 → hard_reset → 再 5 次
         char probe_buf[64];
         bool probe_ok = false;
-        for (int i = 0; i < 5 && !probe_ok; i++) {
-            esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
-                "AT", 1500, probe_buf, sizeof probe_buf);
-            if (rc == ESP_AT_PORT_RC_OK) {
-                ESP_AT_INIT_DBG("AT probe OK (try %d, resp=%s)", i + 1, probe_buf);
-                probe_ok = true;
-            } else {
-                LOGW(ESP_AT_INIT_TAG, "AT probe failed (%d) try %d/5", (int)rc, i + 1);
-                HAL_Delay(500);
-            }
+        esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
+            "AT", 1500, probe_buf, sizeof probe_buf);
+        if (rc == ESP_AT_PORT_RC_OK) {
+            LOGI(ESP_AT_INIT_TAG, "AT probe OK (resp=%s)", probe_buf);
+            probe_ok = true;
+        } else {
+            LOGW(ESP_AT_INIT_TAG, "AT probe failed (%d)", (int)rc);
         }
-        // 5 次全失败 → ESP32 大概率软死锁；如果 en_port 已配置 → 硬复位 + 再轮询
+
         if (!probe_ok && s_port_cfg->en_port) {
-            LOGW(ESP_AT_INIT_TAG, "probes failed → hard reset via EN");
+            LOGW(ESP_AT_INIT_TAG, "probe failed → hard reset via EN");
             esp_at_esp_port_hard_reset(s_port_cfg, 8000);
-            for (int i = 0; i < 5 && !probe_ok; i++) {
-                esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
-                    "AT", 1500, probe_buf, sizeof probe_buf);
-                if (rc == ESP_AT_PORT_RC_OK) {
-                    LOGI(ESP_AT_INIT_TAG, "AT probe OK after hard_reset (try %d)", i + 1);
-                    probe_ok = true;
-                } else {
-                    LOGW(ESP_AT_INIT_TAG, "post-reset probe failed (%d) try %d/5", (int)rc, i + 1);
-                    HAL_Delay(500);
-                }
+            rc = esp_at_port_uart_send_and_wait("AT", 1500, probe_buf, sizeof probe_buf);
+            if (rc == ESP_AT_PORT_RC_OK) {
+                LOGI(ESP_AT_INIT_TAG, "AT probe OK after hard_reset (resp=%s)", probe_buf);
+            } else {
+                LOGW(ESP_AT_INIT_TAG, "post-reset probe failed (%d)", (int)rc);
             }
         }
     }
@@ -95,7 +92,7 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
         esp_at_port_rc_t ae = esp_at_port_uart_send_and_wait(
             "ATE0", 1500, ate_buf, sizeof ate_buf);
         if (ae == ESP_AT_PORT_RC_OK) {
-            ESP_AT_INIT_DBG("echo disabled (ATE0)");
+            LOGI(ESP_AT_INIT_TAG, "echo disabled (ATE0)");
         } else {
             LOGW(ESP_AT_INIT_TAG, "ATE0 failed (%d); continuing anyway", (int)ae);
         }
@@ -191,4 +188,24 @@ esp_at_err_t esp_at_client_get_version(char *out, uint16_t out_sz, uint32_t time
     strncpy(out, r.text, out_sz - 1);
     out[out_sz - 1] = '\0';
     return ESP_AT_OK;
+}
+
+// 日志级别全局设置（透传 stm_log）
+void esp_at_log_set_level(stm_log_level_t level)
+{
+    stm_log_set_level(level);
+}
+
+// 日志级别 per-tag 设置（透传 stm_log）
+void esp_at_log_set_tag_level(const char *tag, stm_log_level_t level)
+{
+    if (!tag) return;
+    stm_log_set_tag_level(tag, level);
+}
+
+// 删除 per-tag 设置，回退全局默认
+void esp_at_log_unset_tag_level(const char *tag)
+{
+    if (!tag) return;
+    stm_log_unset_tag_level(tag);
 }

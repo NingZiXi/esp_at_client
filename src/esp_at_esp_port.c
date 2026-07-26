@@ -62,8 +62,6 @@ void esp_at_esp_port_power_off(const esp_at_port_config_t *cfg)
 }
 
 // 硬复位 ESP32：拉低 EN 100ms → 拉高 → 等 boot 8s
-// 用于 ESP-AT 软死锁时从 STM32 端恢复（必须配置 en_port 才有效）
-// 无 en_port 时直接返回 OK，让调用方自己处理
 esp_at_err_t esp_at_esp_port_hard_reset(const esp_at_port_config_t *cfg, uint32_t boot_wait_ms)
 {
     if (!cfg || !cfg->en_port) {

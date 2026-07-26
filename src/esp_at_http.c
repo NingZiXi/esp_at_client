@@ -73,7 +73,7 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
     }
 
     int transport = strcmp(scheme, "https") == 0 ? 2 : 1;
-    LOGI(ESP_AT_HTTP_TAG, "send scheme=%s host=%s path=%s ct=%d transport=%d",
+    LOGD(ESP_AT_PROTO_TAG, "send scheme=%s host=%s path=%s ct=%d transport=%d",
          scheme, host, path, ct, transport);
 
     char line[512];
@@ -108,7 +108,7 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
                      (int)method, ct, url, transport);
     }
     (void)n;
-    LOGI(ESP_AT_HTTP_TAG, "AT cmd: %s", line);
+    LOGV(ESP_AT_PROTO_TAG, "<< %s", line);
 
     esp_at_err_t e = esp_at_client_send_sync(line, &r, timeout_ms);
     if (e != ESP_AT_OK) {

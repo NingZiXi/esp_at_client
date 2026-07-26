@@ -91,7 +91,7 @@ void app_esp_at_http_demo_run(const esp_at_port_config_t *port_cfg)
         return;
     }
 
-    // ESP32-C3 上电会自动重连：已 GOT_IP 就别 CWJAP，避免踢掉刚拿的 IP
+    // ESP32-C3 上电会自动重连：已 GOT_IP 时跳过 CWJAP
     esp_at_wifi_query_t q = {0};
     if (esp_at_wifi_query_state(&q, 1500) != ESP_AT_OK
         || q.state != ESP_AT_WIFI_GOT_IP) {
