@@ -155,8 +155,33 @@ esp_at_err_t esp_at_client_post_event(esp_at_event_t evt, const esp_at_event_pay
     *p = payload ? *payload : (esp_at_event_payload_t){0};
     p->type = evt;
 
+    // 深拷贝 topic / data：原指针指向 rx_task 行缓冲区，evt_task 派发时已被覆盖
+    if (payload && payload->topic && payload->topic_len > 0) {
+        char *topic_copy = (char *)pvPortMalloc(payload->topic_len + 1);
+        if (topic_copy) {
+            memcpy(topic_copy, payload->topic, payload->topic_len);
+            topic_copy[payload->topic_len] = '\0';
+            p->topic = (const char *)topic_copy;
+        } else {
+            p->topic = NULL;
+            p->topic_len = 0;
+        }
+    }
+    if (payload && payload->data && payload->data_len > 0) {
+        uint8_t *data_copy = (uint8_t *)pvPortMalloc(payload->data_len);
+        if (data_copy) {
+            memcpy(data_copy, payload->data, payload->data_len);
+            p->data = data_copy;
+        } else {
+            p->data = NULL;
+            p->data_len = 0;
+        }
+    }
+
     BaseType_t hp = pdFALSE;
     if (xQueueSendFromISR(g_esp_at_client.urc_queue, &p, &hp) != pdTRUE) {
+        if (p->topic) vPortFree((void *)p->topic);
+        if (p->data)  vPortFree((void *)p->data);
         vPortFree(p);
         return ESP_AT_ERR_FAIL;
     }
@@ -452,6 +477,9 @@ static void evt_task_entry(void *arg)
         if (p->type < ESP_AT_EVENT_MAX && g_esp_at_client.cbs[p->type]) {
             g_esp_at_client.cbs[p->type](p, g_esp_at_client.cb_user[p->type]);
         }
+        // 释放 post_event 深拷贝的 topic / data
+        if (p->topic) vPortFree((void *)p->topic);
+        if (p->data)  vPortFree((void *)p->data);
         vPortFree(p);
     }
 }
