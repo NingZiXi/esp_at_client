@@ -477,6 +477,10 @@ static void evt_task_entry(void *arg)
         if (p->type < ESP_AT_EVENT_MAX && g_esp_at_client.cbs[p->type]) {
             g_esp_at_client.cbs[p->type](p, g_esp_at_client.cb_user[p->type]);
         }
+        // ESP_AT_EVENT_ANY 通配：每个事件多派一次
+        if (g_esp_at_client.cbs_any) {
+            g_esp_at_client.cbs_any(p, g_esp_at_client.cb_user_any);
+        }
         // 释放 post_event 深拷贝的 topic / data
         if (p->topic) vPortFree((void *)p->topic);
         if (p->data)  vPortFree((void *)p->data);
