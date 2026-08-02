@@ -178,14 +178,12 @@ esp_at_err_t esp_at_client_post_event(esp_at_event_t evt, const esp_at_event_pay
         }
     }
 
-    BaseType_t hp = pdFALSE;
-    if (xQueueSendFromISR(g_esp_at_client.urc_queue, &p, &hp) != pdTRUE) {
+    if (xQueueSend(g_esp_at_client.urc_queue, &p, 0) != pdTRUE) {
         if (p->topic) vPortFree((void *)p->topic);
         if (p->data)  vPortFree((void *)p->data);
         vPortFree(p);
         return ESP_AT_ERR_FAIL;
     }
-    portYIELD_FROM_ISR(hp);
     return ESP_AT_OK;
 }
 
@@ -371,6 +369,16 @@ static void process_line(char *line, uint16_t len)
     trim_cr(line, &len);
     if (len == 0) return;
 
+    // +IPD 行 body 字节可能几百，避免 RTT 被淹没：只打印前 30 字节摘要
+    if (esp_at_match_prefix(line, "+IPD")) {
+        char head[40];
+        uint16_t copy = (len < sizeof head - 1) ? len : (uint16_t)(sizeof head - 1);
+        memcpy(head, line, copy);
+        head[copy] = '\0';
+        ESP_AT_LOGD(">> %s... (%u bytes)", head, (unsigned)len);
+        return;
+    }
+
     LOGD(ESP_AT_PROTO_TAG, ">> %s", line);
 
     if (strcmp(line, "ready") == 0) {
@@ -454,6 +462,46 @@ void esp_at_client_rx_task(void *arg)
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         for (;;) {
+            // 反复处理 rx_rb 顶部的 +IPD 帧（一次 notify 可能含多帧）
+            bool ipd_handled = false;
+            uint8_t peek[4];
+            while (ringbuffer_peek(&g_esp_at_client.rx_rb, peek, 4)
+                   && memcmp(peek, "+IPD", 4) == 0) {
+                char hdr[24];
+                uint16_t hi = 0;
+                while (hi < sizeof hdr - 1) {
+                    uint8_t b;
+                    if (!ringbuffer_read(&g_esp_at_client.rx_rb, &b, 1)) break;
+                    hdr[hi++] = (char)b;
+                    if (b == ':') break;
+                }
+                hdr[hi] = '\0';
+                const char *p = hdr + 4;
+                while (*p == ',' || *p == ' ') p++;
+                while (*p && *p != ',') p++;
+                while (*p == ',') p++;
+                int frame_len = atoi(p);
+                uint16_t write_off = g_esp_at_client.ipd_len;
+                if (frame_len <= 0 ||
+                    (uint32_t)write_off + (uint32_t)frame_len > sizeof g_esp_at_client.ipd_buf) {
+                    ESP_AT_LOGW("+IPD overflow: buffered=%u frame=%d",
+                                (unsigned)write_off, frame_len);
+                    break;
+                }
+
+                uint32_t end_tick = HAL_GetTick() + 5000;
+                uint16_t got = 0;
+                while (got < (uint16_t)frame_len && HAL_GetTick() < end_tick) {
+                    uint8_t b;
+                    if (ringbuffer_read(&g_esp_at_client.rx_rb, &b, 1)) {
+                        g_esp_at_client.ipd_buf[write_off + got++] = b;
+                    }
+                }
+                g_esp_at_client.ipd_len = (uint16_t)(write_off + got);
+                ipd_handled = true;
+            }
+            if (ipd_handled) continue;
+
             int pos = ringbuffer_find_char(&g_esp_at_client.rx_rb, '\n');
             if (pos < 0) break;
             uint16_t copy = (uint16_t)(pos > ESP_AT_LINE_MAX - 1 ? ESP_AT_LINE_MAX - 1 : pos);
@@ -509,10 +557,6 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
     if (g_esp_at_client.pending.resp) {
         return ESP_AT_ERR_BUSY;
     }
-
-    /* 清 rx_rb 残留：避免上条命令的 "busy p..." 被新命令误判为响应 */
-    ringbuffer_discard(&g_esp_at_client.rx_rb,
-                       ringbuffer_available(&g_esp_at_client.rx_rb));
 
     memset(resp, 0, sizeof *resp);
     g_esp_at_client.pending.resp = resp;
