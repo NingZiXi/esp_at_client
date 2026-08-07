@@ -51,15 +51,15 @@
 #endif
 
 #ifndef ESP_AT_TASK_RX_STACK
-#define ESP_AT_TASK_RX_STACK     512
+#define ESP_AT_TASK_RX_STACK     2048        // 容纳 line[1024] + 调用链 + 中断嵌套
 #endif
 
 #ifndef ESP_AT_TASK_TX_STACK
-#define ESP_AT_TASK_TX_STACK     384
+#define ESP_AT_TASK_TX_STACK     1024
 #endif
 
 #ifndef ESP_AT_TASK_EVT_STACK
-#define ESP_AT_TASK_EVT_STACK    512
+#define ESP_AT_TASK_EVT_STACK    1024        // post_event 临时 + 调用链（LOGI 临时 buffer 在调用方栈）
 #endif
 
 // 项目根 main/esp_at_config_user.h 可选覆盖

@@ -13,6 +13,7 @@ add_library(esp_at_client STATIC
     ${_esp_at_client_dir}/src/esp_at_wifi.c
     ${_esp_at_client_dir}/src/esp_at_mqtt.c
     ${_esp_at_client_dir}/src/esp_at_http.c
+    ${_esp_at_client_dir}/src/esp_at_tcp.c
     ${_esp_at_client_dir}/src/ringbuffer.c
 )
 

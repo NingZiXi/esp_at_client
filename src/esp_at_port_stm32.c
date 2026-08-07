@@ -18,7 +18,6 @@ static DMA_HandleTypeDef  *s_hdma_rx;
 static DMA_HandleTypeDef  *s_hdma_tx;
 
 static uint8_t  s_rx_dma_buf[ESP_AT_UART_RX_BUF_SZ];
-static volatile uint16_t s_rx_last_size;
 
 // DMA TX + 阻塞等 TC
 esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms)
@@ -54,6 +53,7 @@ esp_at_err_t esp_at_port_uart_start(const esp_at_port_config_t *cfg)
         HAL_StatusTypeDef st = HAL_UARTEx_ReceiveToIdle_DMA(s_huart, s_rx_dma_buf, sizeof s_rx_dma_buf);
         LOGI("port", "ReceiveToIdle_DMA -> %d", (int)st);
         if (st != HAL_OK) return ESP_AT_ERR_FAIL;
+        __HAL_DMA_DISABLE_IT(s_hdma_rx, DMA_IT_HT);
     } else {
         HAL_StatusTypeDef st = HAL_UARTEx_ReceiveToIdle_IT(s_huart, s_rx_dma_buf, sizeof s_rx_dma_buf);
         LOGI("port", "ReceiveToIdle_IT -> %d", (int)st);
@@ -71,18 +71,27 @@ void esp_at_port_uart_irq_handler(UART_HandleTypeDef *huart)
     }
 }
 
-// IDLE / 半 / 全填充回调：写 rx_rb + 唤醒 rx_task + 重开下一段
+// IDLE / 全填充回调：写 rx_rb + 唤醒 rx_task + 重开下一段
 void esp_at_port_uart_rx_event(UART_HandleTypeDef *huart, uint16_t size)
 {
-    if (huart != s_huart) return;
-    if (size == 0) size = sizeof s_rx_dma_buf;
+    if (huart != s_huart || size == 0) return;
 
-    uint16_t w = ringbuffer_write(&g_esp_at_client.rx_rb, s_rx_dma_buf, size);
-    s_rx_last_size = size;
-    (void)w;
+    uint16_t written = ringbuffer_write(&g_esp_at_client.rx_rb, s_rx_dma_buf, size);
+    if (written != size) {
+        LOGW("port", "RX ringbuffer full: wrote=%u/%u",
+             (unsigned)written, (unsigned)size);
+    }
 
     esp_at_client_notify_rx();
-    HAL_UARTEx_ReceiveToIdle_DMA(s_huart, s_rx_dma_buf, sizeof s_rx_dma_buf);
+    if (s_hdma_rx) {
+        HAL_StatusTypeDef st = HAL_UARTEx_ReceiveToIdle_DMA(
+            s_huart, s_rx_dma_buf, sizeof s_rx_dma_buf);
+        if (st == HAL_OK) {
+            __HAL_DMA_DISABLE_IT(s_hdma_rx, DMA_IT_HT);
+        } else {
+            LOGW("port", "restart ReceiveToIdle_DMA failed: %d", (int)st);
+        }
+    }
 }
 
 // TX 完成回调：通知 tx_task

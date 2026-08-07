@@ -70,6 +70,11 @@ typedef struct esp_at_client {
     QueueHandle_t     urc_queue;
     SemaphoreHandle_t cmd_done_sem;
     EventGroupHandle_t boot_eg;
+
+    // 独立 +IPD buffer（raw TCP data）：rx_task 按 <len> 整读写入，不进 rx_rb
+    uint8_t          ipd_buf[2048];
+    volatile uint16_t ipd_len;
+    volatile uint16_t ipd_consumed;
 #define BOOT_READY_BIT  (1u << 0)
 
 // AT 通信细节统一 tag：所有 << TX / >> RX 原始数据用此
