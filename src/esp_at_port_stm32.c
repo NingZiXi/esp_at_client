@@ -154,9 +154,10 @@ esp_at_port_rc_t esp_at_port_uart_send_and_wait(const char *cmd_line,
 
     ringbuffer_discard(rb, ringbuffer_available(rb));  // 清残留
 
-    uint16_t cmd_len = (uint16_t)strlen(cmd_line);
-    uint8_t *tx_buf = (uint8_t *)pvPortMalloc(cmd_len + 2);
-    if (!tx_buf) return ESP_AT_PORT_RC_INVALID;
+    size_t raw_len = strlen(cmd_line);
+    if (raw_len + 2U > ESP_AT_CMD_MAX) return ESP_AT_PORT_RC_INVALID;
+    uint16_t cmd_len = (uint16_t)raw_len;
+    uint8_t tx_buf[ESP_AT_CMD_MAX];
     memcpy(tx_buf, cmd_line, cmd_len);
     tx_buf[cmd_len]     = '\r';
     tx_buf[cmd_len + 1] = '\n';
@@ -164,7 +165,6 @@ esp_at_port_rc_t esp_at_port_uart_send_and_wait(const char *cmd_line,
     LOGV(ESP_AT_PROTO_TAG, "<< %s", cmd_line);
     HAL_StatusTypeDef st = HAL_UART_Transmit(s_huart, tx_buf, cmd_len + 2,
                                              (uint16_t)(wait_ms ? wait_ms : 1000));
-    vPortFree(tx_buf);
     if (st != HAL_OK) {
         LOGE("hal_at", "HAL_UART_Transmit failed: %d", (int)st);
         return ESP_AT_PORT_RC_INVALID;

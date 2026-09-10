@@ -566,20 +566,20 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
     g_esp_at_client.state = ESP_AT_STATE_SENDING;
     g_esp_at_client.state_enter_ms = HAL_GetTick();
 
-    uint16_t cmd_len = (uint16_t)strlen(cmd_line);
-    uint16_t total = (uint16_t)(cmd_len + 2);
-    uint8_t *buf = (uint8_t *)pvPortMalloc(total);
-    if (!buf) {
+    size_t raw_len = strlen(cmd_line);
+    if (raw_len + 2U > ESP_AT_CMD_MAX) {
         g_esp_at_client.pending.resp = NULL;
-        return ESP_AT_ERR_NO_MEM;
+        return ESP_AT_ERR_INVALID_ARG;
     }
+    uint16_t cmd_len = (uint16_t)raw_len;
+    uint16_t total = (uint16_t)(cmd_len + 2U);
+    uint8_t buf[ESP_AT_CMD_MAX];
     memcpy(buf, cmd_line, cmd_len);
     buf[cmd_len]     = '\r';
     buf[cmd_len + 1] = '\n';
 
     LOGV(ESP_AT_PROTO_TAG, "<< %s", cmd_line);
     int rc = ESP_AT_LINK_WRITE(g_esp_at_client.link, buf, total, timeout_ms);
-    vPortFree(buf);
     if (rc < 0) {
         g_esp_at_client.pending.resp = NULL;
         return ESP_AT_ERR_FAIL;

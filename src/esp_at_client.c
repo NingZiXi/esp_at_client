@@ -106,7 +106,8 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
     // 探查 + ATE0 全部 HAL 同步后才启 task，ringbuffer 干净
     esp_at_client_start_tasks();                                    // rx/tx/evt 任务
 
-    LOGI(ESP_AT_INIT_TAG, "esp_at_init done");
+    LOGI(ESP_AT_INIT_TAG, "esp_at_init done, heap=%u",
+         (unsigned)xPortGetFreeHeapSize());
     return ESP_AT_OK;
 }
 
@@ -171,15 +172,15 @@ esp_at_err_t esp_at_cmd_send_only(const char *cmd_line, uint32_t timeout_ms)
     esp_at_client_t *c = esp_at_client_get();
     if (!c->inited) return ESP_AT_ERR_NOT_READY;
 
-    uint16_t cmd_len = (uint16_t)strlen(cmd_line);
-    uint16_t total = (uint16_t)(cmd_len + 2);
-    uint8_t *buf = (uint8_t *)pvPortMalloc(total);
-    if (!buf) return ESP_AT_ERR_NO_MEM;
+    size_t raw_len = strlen(cmd_line);
+    if (raw_len + 2U > ESP_AT_CMD_MAX) return ESP_AT_ERR_INVALID_ARG;
+    uint16_t cmd_len = (uint16_t)raw_len;
+    uint16_t total = (uint16_t)(cmd_len + 2U);
+    uint8_t buf[ESP_AT_CMD_MAX];
     memcpy(buf, cmd_line, cmd_len);
     buf[cmd_len]     = '\r';
     buf[cmd_len + 1] = '\n';
     int rc = ESP_AT_LINK_WRITE(c->link, buf, total, timeout_ms);
-    vPortFree(buf);
     return (rc < 0) ? ESP_AT_ERR_FAIL : ESP_AT_OK;
 }
 

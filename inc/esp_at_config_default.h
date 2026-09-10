@@ -34,6 +34,10 @@
 #define ESP_AT_LINE_MAX          256         // 行缓冲上限
 #endif
 
+#ifndef ESP_AT_CMD_MAX
+#define ESP_AT_CMD_MAX           384         // 单条 AT 命令上限（含 MQTT 参数）
+#endif
+
 #ifndef ESP_AT_CMD_TIMEOUT_DEFAULT_MS
 #define ESP_AT_CMD_TIMEOUT_DEFAULT_MS  3000
 #endif
@@ -51,15 +55,15 @@
 #endif
 
 #ifndef ESP_AT_TASK_RX_STACK
-#define ESP_AT_TASK_RX_STACK     2048        // 容纳 line[1024] + 调用链 + 中断嵌套
+#define ESP_AT_TASK_RX_STACK     1024        // StackType_t 单位：1024 words = 4 KiB
 #endif
 
 #ifndef ESP_AT_TASK_TX_STACK
-#define ESP_AT_TASK_TX_STACK     1024
+#define ESP_AT_TASK_TX_STACK     256         // 仅等待任务通知：256 words = 1 KiB
 #endif
 
 #ifndef ESP_AT_TASK_EVT_STACK
-#define ESP_AT_TASK_EVT_STACK    1024        // post_event 临时 + 调用链（LOGI 临时 buffer 在调用方栈）
+#define ESP_AT_TASK_EVT_STACK    1024        // OTA 回调在此执行：1024 words = 4 KiB
 #endif
 
 // 项目根 main/esp_at_config_user.h 可选覆盖

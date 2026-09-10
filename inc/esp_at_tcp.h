@@ -23,6 +23,13 @@ typedef struct esp_at_tcp {
 } esp_at_tcp_t;
 
 /**
+ * @brief 在其他网络连接建立前启用 AT+CIPMUX=1
+ *
+ * OTA 与 MQTT 并行使用时必须先调用；esp_at_tcp_connect() 也会兜底调用。
+ */
+esp_at_err_t esp_at_tcp_init(void);
+
+/**
  * @brief 建 TCP 长连接（底层 AT+CIPSTART）
  */
 esp_at_err_t esp_at_tcp_connect(esp_at_tcp_t *tcp,

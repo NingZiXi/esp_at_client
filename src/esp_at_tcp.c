@@ -20,6 +20,34 @@
 #define ESP_AT_TCP_TAG       "tcp"
 #define ESP_AT_TCP_LINK_ID   1           // MQTT 占用 link_id=0，新 TCP 用 1，多连接模式
 
+static bool s_mux_enabled;
+
+// 在 MQTT 等连接建立前启用多连接模式
+esp_at_err_t esp_at_tcp_init(void)
+{
+    if (s_mux_enabled) return ESP_AT_OK;
+
+    at_cmd_response_t r = {0};
+    esp_at_err_t e = esp_at_cmd_send_sync("AT+CIPMUX?", &r, 2000);
+    if (e == ESP_AT_OK && strstr(r.text, "+CIPMUX:1")) {
+        s_mux_enabled = true;
+        LOGI(ESP_AT_TCP_TAG, "CIPMUX already enabled");
+        return ESP_AT_OK;
+    }
+
+    memset(&r, 0, sizeof r);
+    e = esp_at_cmd_send_sync("AT+CIPMUX=1", &r, 2000);
+    if (e != ESP_AT_OK) {
+        LOGE(ESP_AT_TCP_TAG, "CIPMUX=1 failed: rc=%d status=%d text=[%.*s]",
+             (int)e, (int)r.status, (int)r.text_len, r.text);
+        return e;
+    }
+
+    s_mux_enabled = true;
+    LOGI(ESP_AT_TCP_TAG, "CIPMUX=1 enabled (multi-connection)");
+    return ESP_AT_OK;
+}
+
 // 查找 HTTP 响应头结束位置
 static int http_find_header_end(const uint8_t *data, uint16_t len)
 {
@@ -72,15 +100,9 @@ esp_at_err_t esp_at_tcp_connect(esp_at_tcp_t *tcp,
     tcp->link_id = ESP_AT_TCP_LINK_ID;
     tcp->connected = false;
 
-    // 启多连接模式（一次性，static 记下），MQTT 占用 link_id=0
-    static bool s_mux_enabled = false;
-    if (!s_mux_enabled) {
-        at_cmd_response_t r = {0};
-        if (esp_at_cmd_send_sync("AT+CIPMUX=1", &r, 1000) == ESP_AT_OK) {
-            s_mux_enabled = true;
-            LOGI(ESP_AT_TCP_TAG, "CIPMUX=1 enabled (multi-connection)");
-        }
-    }
+    // MQTT 占用 link_id=0；OTA TCP 使用 link_id=1。
+    esp_at_err_t mux = esp_at_tcp_init();
+    if (mux != ESP_AT_OK) return mux;
 
     // 关 link_id=N 上的旧连接（如果残留）
     {
@@ -98,7 +120,8 @@ esp_at_err_t esp_at_tcp_connect(esp_at_tcp_t *tcp,
     at_cmd_response_t r = {0};
     esp_at_err_t e = esp_at_cmd_send_sync(line, &r, timeout_ms);
     if (e != ESP_AT_OK) {
-        LOGW(ESP_AT_TCP_TAG, "CIPSTART failed: %s", r.text);
+        LOGW(ESP_AT_TCP_TAG, "CIPSTART failed: rc=%d status=%d text=[%.*s]",
+             (int)e, (int)r.status, (int)r.text_len, r.text);
         return e;
     }
 

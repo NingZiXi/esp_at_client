@@ -55,7 +55,8 @@ esp_at_wifi_state_t  esp_at_wifi_get_state(void);
 /**
  * @brief 主动发 AT+CWSTATE? 查 ESP32 当前状态（不依赖 cached URC）
  *
- * ESP-AT 返回状态码 4（已连接）时，库会映射为 ESP_AT_WIFI_GOT_IP。
+ * ESP-AT 返回状态码 2（已获取 IPv4）时，库会映射为
+ * ESP_AT_WIFI_GOT_IP；状态码 4 表示已断开。
  *
  * 用于 boot 后立即判断 ESP32 是否已自动重连上 AP，
  * 避免对已连的 ESP32 主动 CWJAP 打断内部状态机。
