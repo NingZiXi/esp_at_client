@@ -50,17 +50,18 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
         return e;
     }
 
+    /* 先初始化控制脚，避免复位流程使用尚未配置的 GPIO。 */
+    esp_at_esp_port_gpio_init(port_cfg);
+
     {
         const char *rst = "AT+RST\r\n";                            // 软件复位：清 MQTT 残留 / WiFi 卡死
         extern esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms);
         esp_at_port_uart_transmit((const uint8_t *)rst, 8, 1000);
         LOGI(ESP_AT_INIT_TAG, "AT+RST sent, waiting 5s for boot");
-        HAL_Delay(3000);                                            // 等 boot + 自动重连 WiFi
+        HAL_Delay(5000);                                            // 等 boot + 自动重连 WiFi
         ringbuffer_discard(&g_esp_at_client.rx_rb,                 // 清 boot 期间的杂数据
                            ringbuffer_available(&g_esp_at_client.rx_rb));
     }
-
-    esp_at_esp_port_gpio_init(port_cfg);                           // 控制脚
 
     {
         char probe_buf[64];
