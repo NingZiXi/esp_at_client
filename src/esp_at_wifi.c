@@ -78,8 +78,18 @@ esp_at_err_t esp_at_wifi_query_state(esp_at_wifi_query_t *q, uint32_t timeout_ms
     if (!p) return ESP_AT_ERR_RESP;
     p += strlen("+CWSTATE:");
     int state = (int)strtol(p, NULL, 10);
-    if (state < 0 || state > (int)ESP_AT_WIFI_LOST) return ESP_AT_ERR_RESP;
-    q->state = (esp_at_wifi_state_t)state;
+    /* ESP-AT 的 CWSTATE 状态码与库内部枚举不同：4 表示已连接，
+       而库中的 4 是 LOST（用于 DISCONNECT URC）。统一映射为 GOT_IP，
+       避免对已自动重连的模块再次发送 CWJAP 导致连接被打断。 */
+    if (state == 4) {
+        q->state = ESP_AT_WIFI_GOT_IP;
+    } else if (state == 3) {
+        q->state = ESP_AT_WIFI_LOST;
+    } else if (state >= 0 && state <= 2) {
+        q->state = (esp_at_wifi_state_t)state;
+    } else {
+        return ESP_AT_ERR_RESP;
+    }
 
     // SSID 在 , 后的第一个 "..." 里
     const char *q1 = strchr(p, ',');
