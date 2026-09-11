@@ -14,6 +14,10 @@
 
 #define ESP_AT_INIT_TAG "esp_at_init"
 
+#ifndef CONFIG_OTA_TEST_AT_INIT_FAIL
+#define CONFIG_OTA_TEST_AT_INIT_FAIL 0
+#endif
+
 static const esp_at_port_config_t *s_port_cfg;
 
 // 按用户 config 宏应用库内 tag 日志级别
@@ -52,6 +56,7 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
 
     /* 先初始化控制脚，避免复位流程使用尚未配置的 GPIO。 */
     esp_at_esp_port_gpio_init(port_cfg);
+    esp_at_err_t init_result = ESP_AT_OK;
 
     {
         const char *rst = "AT+RST\r\n";                            // 软件复位：清 MQTT 残留 / WiFi 卡死
@@ -85,9 +90,13 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
                 "AT", 1500, probe_buf, sizeof probe_buf);
             if (rc == ESP_AT_PORT_RC_OK) {
                 LOGI(ESP_AT_INIT_TAG, "AT probe OK after hard_reset (resp=%s)", probe_buf);
+                probe_ok = true;
             } else {
                 LOGW(ESP_AT_INIT_TAG, "post-reset probe failed (%d)", (int)rc);
             }
+        }
+        if (!probe_ok) {
+            init_result = ESP_AT_ERR_TIMEOUT;
         }
     }
 
@@ -100,15 +109,29 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
             LOGI(ESP_AT_INIT_TAG, "echo disabled (ATE0)");
         } else {
             LOGW(ESP_AT_INIT_TAG, "ATE0 failed (%d); continuing anyway", (int)ae);
+            if (init_result == ESP_AT_OK) {
+                init_result = (ae == ESP_AT_PORT_RC_TIMEOUT)
+                    ? ESP_AT_ERR_TIMEOUT : ESP_AT_ERR_RESP;
+            }
         }
     }
 
     // 探查 + ATE0 全部 HAL 同步后才启 task，ringbuffer 干净
     esp_at_client_start_tasks();                                    // rx/tx/evt 任务
 
-    LOGI(ESP_AT_INIT_TAG, "esp_at_init done, heap=%u",
-         (unsigned)xPortGetFreeHeapSize());
-    return ESP_AT_OK;
+#if CONFIG_OTA_TEST_AT_INIT_FAIL
+    LOGW(ESP_AT_INIT_TAG, "test fault injection: ESP-AT init forced to fail");
+    init_result = ESP_AT_ERR_TIMEOUT;
+#endif
+
+    if (init_result == ESP_AT_OK) {
+        LOGI(ESP_AT_INIT_TAG, "esp_at_init done, heap=%u",
+             (unsigned)xPortGetFreeHeapSize());
+    } else {
+        LOGE(ESP_AT_INIT_TAG, "esp_at_init failed (%d), heap=%u",
+             (int)init_result, (unsigned)xPortGetFreeHeapSize());
+    }
+    return init_result;
 }
 
 // 反初始化 ESP-AT 客户端
