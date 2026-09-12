@@ -6,7 +6,7 @@
 #include "ringbuffer.h"
 #include <string.h>
 
-// 初始化环形缓冲
+// 初始化环形缓冲。
 void ringbuffer_init(ringbuffer_t *rb, uint8_t *storage, uint16_t size)
 {
     rb->buf  = storage;

@@ -105,7 +105,7 @@ void esp_at_port_uart_tx_cplt (UART_HandleTypeDef *huart);
  */
 void esp_at_port_uart_rx_dump(void);
 
-// HAL 同步发送：scheduler 损坏环境下的同步发送兜底（HAL_Delay 不依赖 FreeRTOS tick）
+// HAL 同步发送：调度器异常时的发送兜底（HAL_Delay 不依赖 FreeRTOS tick）。
 typedef enum {
     ESP_AT_PORT_RC_OK = 0,
     ESP_AT_PORT_RC_ERROR,

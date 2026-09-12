@@ -34,7 +34,7 @@ struct esp_at_link {
 #define ESP_AT_LINK_ENTER_CRITICAL(l)   ((l)->ops->enter_critical(l))
 #define ESP_AT_LINK_EXIT_CRITICAL(l)    ((l)->ops->exit_critical(l))
 
-// STM32 HAL UART DMA 默认实现
+// STM32 HAL UART DMA 默认实现。
 extern const esp_at_link_ops_t esp_at_uart_link_ops;
 
 /**

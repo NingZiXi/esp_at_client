@@ -1,6 +1,6 @@
 /**
  * @file    esp_at_tcp.h
- * @brief   raw TCP + 自拼 HTTP/1.1 客户端（绕开 ESP-AT HTTPCLIENT state machine bug）
+ * @brief   原始 TCP + 自拼 HTTP/1.1 客户端（绕开 ESP-AT HTTPCLIENT 状态机缺陷）
  */
 
 #ifndef ESP_AT_TCP_H
@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-// TCP 连接上下文（caller 提供 buffer，避免 heap 分配）
+// TCP 连接上下文（由调用方提供缓冲区，避免堆分配）。
 typedef struct esp_at_tcp {
     char     host[64];                 // server 主机名或 IP
     uint16_t port;                     // server 端口

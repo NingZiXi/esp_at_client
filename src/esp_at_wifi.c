@@ -14,7 +14,7 @@
 
 #define ESP_AT_WIFI_TAG "wifi"
 
-// 设置 WiFi 模式
+// 设置 WiFi 模式。
 esp_at_err_t esp_at_wifi_init(uint8_t mode)
 {
     char line[24];
@@ -29,7 +29,7 @@ esp_at_err_t esp_at_wifi_init(uint8_t mode)
     return e;
 }
 
-// 连接 AP
+// 连接 AP。
 esp_at_err_t esp_at_wifi_connect(const char *ssid, const char *pwd, uint32_t timeout_ms)
 {
     if (!ssid) return ESP_AT_ERR_INVALID_ARG;
@@ -46,7 +46,7 @@ esp_at_err_t esp_at_wifi_connect(const char *ssid, const char *pwd, uint32_t tim
     return e;
 }
 
-// 断开 AP
+// 断开 AP。
 esp_at_err_t esp_at_wifi_disconnect(void)
 {
     at_cmd_response_t r = {0};
@@ -54,13 +54,13 @@ esp_at_err_t esp_at_wifi_disconnect(void)
     return e;
 }
 
-// 查询 WiFi 状态
+// 查询 WiFi 状态。
 esp_at_wifi_state_t esp_at_wifi_get_state(void)
 {
     return esp_at_client_get()->wifi_state;
 }
 
-// 主动发 AT+CWSTATE? 查 ESP32 当前状态（不依赖 cached URC）
+// 主动发 AT+CWSTATE? 查询 ESP32 当前状态（不依赖缓存的 URC）。
 esp_at_err_t esp_at_wifi_query_state(esp_at_wifi_query_t *q, uint32_t timeout_ms)
 {
     if (!q) return ESP_AT_ERR_INVALID_ARG;
@@ -73,7 +73,7 @@ esp_at_err_t esp_at_wifi_query_state(esp_at_wifi_query_t *q, uint32_t timeout_ms
         return e;
     }
 
-    // +CWSTATE:<state>,"<ssid>"
+    // +CWSTATE:<state>,"<ssid>"。
     const char *p = strstr(r.text, "+CWSTATE:");
     if (!p) return ESP_AT_ERR_RESP;
     p += strlen("+CWSTATE:");
@@ -90,7 +90,7 @@ esp_at_err_t esp_at_wifi_query_state(esp_at_wifi_query_t *q, uint32_t timeout_ms
         default: return ESP_AT_ERR_RESP;
     }
 
-    // SSID 在 , 后的第一个 "..." 里
+// SSID 位于逗号后的第一个 "..." 中。
     const char *q1 = strchr(p, ',');
     if (q1) {
         const char *q2 = strchr(q1 + 1, '"');
@@ -105,7 +105,7 @@ esp_at_err_t esp_at_wifi_query_state(esp_at_wifi_query_t *q, uint32_t timeout_ms
     return ESP_AT_OK;
 }
 
-// 查询 IP / GW / MASK（CIPSTA? 响应多行：ip / gateway / netmask）
+// 查询 IP / GW / MASK（CIPSTA? 响应包含 ip / gateway / netmask 多行）。
 esp_at_err_t esp_at_wifi_get_ip(char ip[16], char gw[16], char mask[16])
 {
     at_cmd_response_t r = {0};
@@ -122,7 +122,7 @@ esp_at_err_t esp_at_wifi_get_ip(char ip[16], char gw[16], char mask[16])
     char *save = NULL;
     char *tok  = strtok_r(r.text, "\r\n", &save);
     while (tok) {
-        // n 必须严格等于 pattern 长度（含"），否则越界比较
+        // n 必须严格等于 pattern 长度（含引号），否则会越界比较。
         if      (strncmp(tok, "+CIPSTA:ip:\"",      12) == 0) esp_at_extract_str(tok, "ip",      ip,   ip   ? 16 : 1);
         else if (strncmp(tok, "+CIPSTA:gateway:\"", 17) == 0) esp_at_extract_str(tok, "gateway", gw,   gw   ? 16 : 1);
         else if (strncmp(tok, "+CIPSTA:netmask:\"", 17) == 0) esp_at_extract_str(tok, "netmask", mask, mask ? 16 : 1);

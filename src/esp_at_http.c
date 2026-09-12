@@ -15,7 +15,7 @@
 #define ESP_AT_HTTP_TAG "http"
 #define HTTP_URL_PRESET_THRESHOLD  200
 
-// 解析 http://host[:port]/path
+// 解析 http://主机[:端口]/路径。
 static esp_at_err_t parse_url(const char *url,
                               char *scheme, size_t scheme_sz,
                               char *host, size_t host_sz,
@@ -65,7 +65,7 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
     if (parse_url(url, scheme, sizeof scheme, host, sizeof host, path, sizeof path)
         != ESP_AT_OK) return ESP_AT_ERR_INVALID_ARG;
 
-    int ct = 0;                                       // 0=urlencoded 1=json 2=multipart 3=xml
+    int ct = 0;                                       // 0=表单 1=JSON 2=多部分 3=XML
     if (content_type) {
         if (strcmp(content_type, "application/json") == 0) ct = 1;
         else if (strcmp(content_type, "multipart/form-data") == 0) ct = 2;
@@ -80,16 +80,16 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
     at_cmd_response_t r = {0};
     int n;
 
-    // >200B URL 改走 AT+HTTPURLCFG 预存；当前简化直接传 url
+// URL 超过 200 字节时可通过 AT+HTTPURLCFG 预存；当前实现直接传入 URL。
     (void)HTTP_URL_PRESET_THRESHOLD;
 
-    // ESP-AT 4.1.x HTTPCLIENT：url 必须用双引号（否则 AT parser 把 : / 当成字段分隔符）
+    // ESP-AT 4.1.x HTTPCLIENT：URL 必须使用双引号，否则 AT 解析器会把 : / 当成字段分隔符。
     if (method == ESP_AT_HTTP_GET || method == ESP_AT_HTTP_HEAD) {
         n = snprintf(line, sizeof line,
                      "AT+HTTPCLIENT=%d,%d,\"%s\",,,%d",
                      (int)method, ct, url, transport);
     } else if (body && body_len > 0) {
-        // data 里的双引号需要转义（\"），否则 AT parser 会切断字段
+        // data 中的双引号需要转义（\"），否则 AT 解析器会截断字段。
         char escaped[256];
         size_t ei = 0;
         for (size_t bi = 0; bi < body_len && ei + 2 < sizeof escaped; bi++) {
@@ -116,8 +116,8 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
         return e;
     }
 
-    // +HTTPCLIENT:<size>,<body>：ESP-AT 只透传 body（status line + headers 已被内部解析），resp->status 留 0
-    // TODO: 长 body 多帧拼接
+    // +HTTPCLIENT:<size>,<body>：ESP-AT 只透传 body（状态行和头部已由内部解析），resp->status 保持为 0。
+    // TODO：支持长 body 的多帧拼接。
     const char *p_hdr = strstr(r.text, "+HTTPCLIENT:");
     if (p_hdr) {
         const char *p_sz = p_hdr + strlen("+HTTPCLIENT:");

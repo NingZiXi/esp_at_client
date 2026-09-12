@@ -57,14 +57,14 @@ esp_at_client_t *esp_at_client_get(void)
     return &g_esp_at_client;
 }
 
-// 行匹配：检查 line 是否以 prefix 开头
+// 行匹配：检查 line 是否以 prefix 开头。
 bool esp_at_match_prefix(const char *line, const char *prefix)
 {
     if (!line || !prefix) return false;
     return strncmp(line, prefix, strlen(prefix)) == 0;
 }
 
-// 行内解析整数：找 key 后整数（key 含或不含 =/:）
+// 行内解析整数：查找 key 后的整数（key 可含或不含 =/:）。
 bool esp_at_extract_int(const char *line, const char *key, int *out)
 {
     if (!line || !key || !out) return false;
@@ -76,7 +76,7 @@ bool esp_at_extract_int(const char *line, const char *key, int *out)
     return true;
 }
 
-// 行内解析字符串：找 "key":"..."
+// 行内解析字符串：查找 "key":"..."。
 bool esp_at_extract_str(const char *line, const char *key, char *out, uint16_t out_sz)
 {
     if (!line || !key || !out || out_sz == 0) return false;
@@ -94,7 +94,7 @@ bool esp_at_extract_str(const char *line, const char *key, char *out, uint16_t o
     return i > 0;
 }
 
-// DMA RX 完成回调中调用：通知 rx_task
+// 在 DMA RX 完成回调中调用：通知 rx_task。
 void esp_at_client_notify_rx(void)
 {
     BaseType_t hp = pdFALSE;
@@ -104,7 +104,7 @@ void esp_at_client_notify_rx(void)
     portYIELD_FROM_ISR(hp);
 }
 
-// DMA TX 完成回调中调用：通知 tx_task
+// 在 DMA TX 完成回调中调用：通知 tx_task。
 void esp_at_client_notify_tx(void)
 {
     BaseType_t hp = pdFALSE;
@@ -114,7 +114,7 @@ void esp_at_client_notify_tx(void)
     portYIELD_FROM_ISR(hp);
 }
 
-// 设置 ready 位
+// 设置 ready 标志位。
 void esp_at_client_set_ready(void)
 {
     if (g_esp_at_client.boot_eg) {
@@ -122,7 +122,7 @@ void esp_at_client_set_ready(void)
     }
 }
 
-// 查询 ready
+// 查询 ready 标志位。
 bool esp_at_client_is_ready(void)
 {
     if (!g_esp_at_client.boot_eg) return false;
@@ -130,7 +130,7 @@ bool esp_at_client_is_ready(void)
     return (b & BOOT_READY_BIT) != 0;
 }
 
-// 阻塞等 ready
+// 阻塞等待 ready 标志位。
 uint32_t esp_at_client_wait_ready(uint32_t timeout_ms)
 {
     if (!g_esp_at_client.boot_eg) return timeout_ms;
@@ -144,19 +144,19 @@ uint32_t esp_at_client_wait_ready(uint32_t timeout_ms)
     return timeout_ms;
 }
 
-// 行解析 URC 转事件投递（异步：推到 urc_queue，evt_task 异步分发）
+// 将解析出的 URC 转为事件投递（异步放入 urc_queue，由 evt_task 分发）。
 esp_at_err_t esp_at_client_post_event(esp_at_event_t evt, const esp_at_event_payload_t *payload)
 {
     if (!g_esp_at_client.inited) return ESP_AT_ERR_NOT_READY;
     if (evt < 0 || evt >= ESP_AT_EVENT_MAX) return ESP_AT_ERR_INVALID_ARG;
 
-    // 复制 payload 到堆（evt_task 异步消费，原 stack 帧不能复用）
+    // 将 payload 复制到堆（evt_task 异步消费，原栈帧不能复用）。
     esp_at_event_payload_t *p = (esp_at_event_payload_t *)pvPortMalloc(sizeof *p);
     if (!p) return ESP_AT_ERR_NO_MEM;
     *p = payload ? *payload : (esp_at_event_payload_t){0};
     p->type = evt;
 
-    // 深拷贝 topic / data：原指针指向 rx_task 行缓冲区，evt_task 派发时已被覆盖
+    // 深拷贝 topic / data：原指针指向 rx_task 行缓冲区，evt_task 派发时可能已被覆盖。
     if (payload && payload->topic && payload->topic_len > 0) {
         char *topic_copy = (char *)pvPortMalloc(payload->topic_len + 1);
         if (topic_copy) {
@@ -197,7 +197,7 @@ static void trim_cr(char *line, uint16_t *len)
     }
 }
 
-// 处理 "ready" 行：标记 ready + 派发 ESP_AT_EVENT_READY
+// 处理 "ready" 行：标记 ready 并派发 ESP_AT_EVENT_READY。
 static void handle_line_ready(const char *line)
 {
     ESP_AT_LOGI("ready");
@@ -206,7 +206,7 @@ static void handle_line_ready(const char *line)
     esp_at_client_post_event(ESP_AT_EVENT_READY, NULL);
 }
 
-// 处理 WIFI CONNECTED / WIFI GOT IP / WIFI DISCONNECT
+// 处理 WIFI CONNECTED / WIFI GOT IP / WIFI DISCONNECT 事件。
 static void handle_line_wifi(const char *line, const esp_at_event_payload_t *blank)
 {
     if (esp_at_match_prefix(line, "WIFI CONNECTED")) {
@@ -221,7 +221,7 @@ static void handle_line_wifi(const char *line, const esp_at_event_payload_t *bla
     }
 }
 
-// 处理 MQTT URC（CONNECTED/DISCONNECTED/PUB OK/FAIL/SUBRECV/SUB）
+// 处理 MQTT URC（CONNECTED/DISCONNECTED/PUB OK/FAIL/SUBRECV/SUB）。
 static void handle_line_mqtt_urc(const char *line)
 {
     esp_at_event_payload_t p = {0};
@@ -268,7 +268,7 @@ static void handle_line_mqtt_urc(const char *line)
             }
         }
 
-        /* strrchr/strtol 必须在写 '\0' 之前完成——改完 q2 后字符串被截断 */
+        /* strrchr/strtol 必须在写入 '\0' 前完成，否则修改 q2 后字符串会被截断。 */
         const char *last = strrchr(line, ',');
         if (last) {
             const char *prev = NULL;
@@ -287,15 +287,15 @@ static void handle_line_mqtt_urc(const char *line)
         return;
     }
     if (esp_at_match_prefix(line, "+MQTTSUB:")) {
-        // SUB/UNSUB 返回（OK/FAIL）
+        // SUB/UNSUB 返回（OK/FAIL）。
     }
 }
 
-// 处理 +HTTPCLIENT:<size>,<data> 多帧响应
+// 处理 +HTTPCLIENT:<size>,<data> 多帧响应。
 static void handle_line_http_urc(const char *line)
 {
     if (esp_at_match_prefix(line, "+HTTPCLIENT")) {
-        // 把整行追加到 pending.resp->text，给 esp_at_http_request 拼装完整 body
+        // 将整行追加到 pending.resp->text，供 esp_at_http_request 拼装完整 body。
         if (g_esp_at_client.pending.resp) {
             at_cmd_response_t *r = g_esp_at_client.pending.resp;
             uint16_t line_len = (uint16_t)strlen(line);
@@ -350,7 +350,7 @@ static void handle_line_err_code(const char *line)
     }
 }
 
-// 完成当前 pending 命令：写回 status / elapsed_ms，释放 semaphore
+// 完成当前 pending 命令：写回 status / elapsed_ms 并释放信号量。
 static void finish_pending(at_resp_status_t status)
 {
     if (!g_esp_at_client.pending.resp) return;
@@ -370,7 +370,7 @@ static void process_line(char *line, uint16_t len)
     trim_cr(line, &len);
     if (len == 0) return;
 
-    // +IPD 行 body 字节可能几百，避免 RTT 被淹没：只打印前 30 字节摘要
+    // +IPD 行 body 可能有数百字节，为避免 RTT 被淹没只打印前 30 字节摘要。
     if (esp_at_match_prefix(line, "+IPD")) {
         char head[40];
         uint16_t copy = (len < sizeof head - 1) ? len : (uint16_t)(sizeof head - 1);
@@ -410,7 +410,7 @@ static void process_line(char *line, uint16_t len)
         finish_pending(AT_RESP_BUSY);
         return;
     }
-    if (line[0] == '>') {                          // DATA_PROMPT → RAW_TX
+    if (line[0] == '>') {                          // DATA_PROMPT → RAW_TX。
         g_esp_at_client.state = ESP_AT_STATE_DATA_PROMPT;
         return;
     }
@@ -438,7 +438,7 @@ static void process_line(char *line, uint16_t len)
     }
 }
 
-// 应用层周期调用：从 rx_rb 抽完整行跑 process_line
+// 应用层周期调用：从 rx_rb 提取完整行并执行 process_line。
 void esp_at_client_pump_rx(void)
 {
     char line[ESP_AT_LINE_MAX];
@@ -454,7 +454,7 @@ void esp_at_client_pump_rx(void)
     }
 }
 
-// RX 任务入口（FreeRTOS task arg 未用）
+// RX 任务入口（未使用 FreeRTOS 任务参数）。
 void esp_at_client_rx_task(void *arg)
 {
     (void)arg;
@@ -463,7 +463,7 @@ void esp_at_client_rx_task(void *arg)
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         for (;;) {
-            // 反复处理 rx_rb 顶部的 +IPD 帧（一次 notify 可能含多帧）
+            // 反复处理 rx_rb 顶部的 +IPD 帧（一次通知可能包含多帧）。
             bool ipd_handled = false;
             uint8_t peek[4];
             while (1) {
@@ -558,7 +558,7 @@ void esp_at_client_rx_task(void *arg)
     }
 }
 
-// evt_task：scheduler 正常环境下从此队列取事件派发
+// evt_task：调度器正常运行时从该队列取出并派发事件。
 static void evt_task_entry(void *arg)
 {
     (void)arg;
@@ -569,18 +569,18 @@ static void evt_task_entry(void *arg)
         if (p->type < ESP_AT_EVENT_MAX && g_esp_at_client.cbs[p->type]) {
             g_esp_at_client.cbs[p->type](p, g_esp_at_client.cb_user[p->type]);
         }
-        // ESP_AT_EVENT_ANY 通配：每个事件多派一次
+        // ESP_AT_EVENT_ANY 通配：每个事件额外派发一次。
         if (g_esp_at_client.cbs_any) {
             g_esp_at_client.cbs_any(p, g_esp_at_client.cb_user_any);
         }
-        // 释放 post_event 深拷贝的 topic / data
+        // 释放 post_event 深拷贝的 topic / data。
         if (p->topic) vPortFree((void *)p->topic);
         if (p->data)  vPortFree((void *)p->data);
         vPortFree(p);
     }
 }
 
-// tx_task：保留通知接口（实际发送在 send_sync 直调 link.write）
+// tx_task：保留通知接口（实际发送由 send_sync 直接调用 link.write）。
 static void tx_task_entry(void *arg)
 {
     (void)arg;
@@ -590,7 +590,7 @@ static void tx_task_entry(void *arg)
     }
 }
 
-// 同步发送：清 rx_rb / 拼 CRLF / 写 link / 自抽行 / 收 OK|ERROR|busy
+// 同步发送：清空 rx_rb、拼接 CRLF、写入链路、抽取响应行并等待 OK/ERROR/busy。
 esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
                                      at_cmd_response_t *resp,
                                      uint32_t timeout_ms)
@@ -661,7 +661,7 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
     return result;
 }
 
-// 客户端初始化：分配 ringbuffer / 同步原语
+// 客户端初始化：分配 ringbuffer 和同步原语。
 esp_at_err_t esp_at_client_init(esp_at_link_t *link)
 {
     if (g_esp_at_client.inited) return ESP_AT_OK;

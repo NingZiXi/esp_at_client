@@ -65,7 +65,7 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
         extern esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms);
         esp_at_port_uart_transmit((const uint8_t *)rst, 8, 1000);
         LOGI(ESP_AT_INIT_TAG, "AT+RST sent, waiting 5s for boot");
-        HAL_Delay(5000);                                            // 等 boot + 自动重连 WiFi
+        HAL_Delay(5000);                                            // 等待 boot 完成并自动重连 WiFi
         ringbuffer_discard(&g_esp_at_client.rx_rb,                 // 清 boot 期间的杂数据
                            ringbuffer_available(&g_esp_at_client.rx_rb));
     }
@@ -102,7 +102,7 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
         }
     }
 
-    // ATE0 关回显：HAL 同步发送（rx_task 还没启）
+    // 关闭 ATE0 回显：使用 HAL 同步发送（此时 rx_task 尚未启动）。
     {
         char ate_buf[64];
         esp_at_port_rc_t ae = esp_at_port_uart_send_and_wait(
@@ -118,7 +118,7 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
         }
     }
 
-    // 探查 + ATE0 全部 HAL 同步后才启 task，ringbuffer 干净
+    // 探测和 ATE0 均通过 HAL 同步完成后再启动任务，确保 ringbuffer 干净。
     esp_at_client_start_tasks();                                    // rx/tx/evt 任务
 
 #if CONFIG_OTA_TEST_AT_INIT_FAIL
@@ -144,13 +144,13 @@ esp_at_err_t esp_at_deinit(void)
     return ESP_AT_OK;
 }
 
-// 同步等待 ready URC
+// 同步等待 ready URC。
 uint32_t esp_at_wait_ready(uint32_t timeout_ms)
 {
     return esp_at_client_wait_ready(timeout_ms);
 }
 
-// 注册事件回调（evt==ESP_AT_EVENT_ANY 走通配）
+// 注册事件回调（evt==ESP_AT_EVENT_ANY 使用通配回调）。
 esp_at_err_t esp_at_register_event_cb(esp_at_event_t evt, esp_at_event_cb_t cb, void *user)
 {
     esp_at_client_t *c = esp_at_client_get();

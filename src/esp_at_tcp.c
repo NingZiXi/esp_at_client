@@ -1,6 +1,6 @@
 /**
  * @file    esp_at_tcp.c
- * @brief   raw TCP + 自拼 HTTP/1.1 客户端（绕开 ESP-AT HTTPCLIENT state machine bug）
+ * @brief   原始 TCP + 自拼 HTTP/1.1 客户端（绕开 ESP-AT HTTPCLIENT 状态机缺陷）
  */
 
 #include "esp_at_tcp.h"
@@ -18,11 +18,11 @@
 #include "stm_log.h"
 
 #define ESP_AT_TCP_TAG       "tcp"
-#define ESP_AT_TCP_LINK_ID   1           // MQTT 占用 link_id=0，新 TCP 用 1，多连接模式
+#define ESP_AT_TCP_LINK_ID   1           // MQTT 占用 link_id=0，新 TCP 用 1，启用多连接模式
 
 static bool s_mux_enabled;
 
-// 在 MQTT 等连接建立前启用多连接模式
+// 在 MQTT 等连接建立前启用多连接模式。
 esp_at_err_t esp_at_tcp_init(void)
 {
     if (s_mux_enabled) return ESP_AT_OK;
@@ -48,7 +48,7 @@ esp_at_err_t esp_at_tcp_init(void)
     return ESP_AT_OK;
 }
 
-// 查找 HTTP 响应头结束位置
+// 查找 HTTP 响应头结束位置。
 static int http_find_header_end(const uint8_t *data, uint16_t len)
 {
     for (uint16_t i = 0; i + 3 < len; i++) {
@@ -60,7 +60,7 @@ static int http_find_header_end(const uint8_t *data, uint16_t len)
     return -1;
 }
 
-// 解析 HTTP Content-Length
+// 解析 HTTP Content-Length。
 static int http_parse_content_length(const uint8_t *data, uint16_t header_len)
 {
     static const char key[] = "Content-Length:";
@@ -104,7 +104,7 @@ esp_at_err_t esp_at_tcp_connect(esp_at_tcp_t *tcp,
     esp_at_err_t mux = esp_at_tcp_init();
     if (mux != ESP_AT_OK) return mux;
 
-    // 关 link_id=N 上的旧连接（如果残留）
+    // 关闭 link_id=N 上的旧连接（如果有残留）。
     {
         char close_cmd[24];
         snprintf(close_cmd, sizeof close_cmd, "AT+CIPCLOSE=%u", (unsigned)tcp->link_id);
@@ -159,7 +159,7 @@ esp_at_err_t esp_at_tcp_http_get_range(esp_at_tcp_t *tcp,
 {
     if (!tcp || !tcp->connected || !host || !path) return ESP_AT_ERR_INVALID_ARG;
 
-    // 拼 HTTP/1.1 GET 请求
+    // 拼接 HTTP/1.1 GET 请求。
     char req[256];
     int n = snprintf(req, sizeof req,
                      "GET %s HTTP/1.1\r\n"
@@ -178,7 +178,7 @@ esp_at_err_t esp_at_tcp_http_get_range(esp_at_tcp_t *tcp,
     c->ipd_len = 0;
     c->ipd_consumed = 0;
 
-    // send_only 发 AT+CIPSEND=<link_id>,<length>
+    // 通过 send_only 发送 AT+CIPSEND=<link_id>,<length>。
     char cmd[32];
     snprintf(cmd, sizeof cmd, "AT+CIPSEND=%u,%u", (unsigned)tcp->link_id, (unsigned)n);
     LOGI(ESP_AT_TCP_TAG, ">> %s", cmd);
@@ -188,13 +188,13 @@ esp_at_err_t esp_at_tcp_http_get_range(esp_at_tcp_t *tcp,
         return e;
     }
 
-    // 等 '>' prompt（直接在 rx_rb 找）
+    // 等待 '>' 提示符（直接在 rx_rb 中查找）。
     if (!rx_wait_gt_prompt(3000)) {
         LOGW(ESP_AT_TCP_TAG, "no '>' prompt in rx_rb");
         return ESP_AT_ERR_TIMEOUT;
     }
 
-    // '>' 收到，link.write HTTP 请求
+    // 收到 '>' 后，通过 link.write 发送 HTTP 请求。
     esp_at_link_t *link = esp_at_client_get()->link;
     int rc = ESP_AT_LINK_WRITE(link, (const uint8_t *)req, (uint16_t)n, 5000);
     if (rc < 0) {
@@ -202,9 +202,9 @@ esp_at_err_t esp_at_tcp_http_get_range(esp_at_tcp_t *tcp,
         return ESP_AT_ERR_FAIL;
     }
 
-    // 给 ESP-AT 20ms 发送 SEND OK，避免 rx_task 抢先消费
+    // 等待 20ms，让 ESP-AT 发送 SEND OK，避免 rx_task 抢先消费。
     osDelay(20);
-    // 不等 SEND OK：server 已收到 GET = HTTP 请求已经成功发出，直接进入 recv_body
+    // 不等待 SEND OK：服务端已收到 GET，说明 HTTP 请求已发出，直接进入 recv_body。
     return ESP_AT_OK;
 }
 
@@ -218,7 +218,7 @@ esp_at_err_t esp_at_tcp_recv_body(esp_at_tcp_t *tcp,
     esp_at_client_t *c = esp_at_client_get();
     uint32_t deadline = HAL_GetTick() + timeout_ms;
 
-    // 等 HTTP 头完整，再按 Content-Length 等完整响应
+    // 等待 HTTP 头完整，再按 Content-Length 等待完整响应。
     int header_end = -1;
     int content_len = -1;
     uint32_t expected = 0;

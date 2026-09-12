@@ -27,10 +27,10 @@ typedef enum {
 // 单条 AT 命令响应状态
 typedef enum {
     AT_RESP_OK            = 0,
-    AT_RESP_ERROR         = 1,   // ERROR / +CWJAP:<errcode> ERROR
+    AT_RESP_ERROR         = 1,   // ERROR / +CWJAP:<errcode> ERROR。
     AT_RESP_FAIL          = 2,
     AT_RESP_TIMEOUT       = 3,
-    AT_RESP_BUSY          = 4,   // busy p...
+    AT_RESP_BUSY          = 4,   // busy p...。
     AT_RESP_ABORTED       = 5,
 } at_resp_status_t;
 
@@ -47,9 +47,9 @@ typedef struct {
     uint32_t         elapsed_ms;
 } at_cmd_response_t;
 
-// 事件枚举：ESP_AT_EVENT_ANY = -1 是通配（register-only）
+// 事件枚举：ESP_AT_EVENT_ANY = -1 表示通配（仅用于注册）。
 typedef enum {
-    ESP_AT_EVENT_ANY               = -1,   // 通配（register-only，dispatcher 对所有事件多派发一次）
+    ESP_AT_EVENT_ANY               = -1,   // 通配（仅用于注册，分发器对所有事件额外派发一次）。
     ESP_AT_EVENT_READY             = 0,
     ESP_AT_EVENT_WIFI_CONNECTED    = 1,
     ESP_AT_EVENT_WIFI_GOT_IP       = 2,
@@ -64,7 +64,7 @@ typedef enum {
     ESP_AT_EVENT_MAX
 } esp_at_event_t;
 
-// 事件 payload
+// 事件 payload。
 typedef struct {
     esp_at_event_t   type;
     int32_t          link_id;       // MQTT link id；其他事件忽略
@@ -80,7 +80,7 @@ typedef struct {
 // 事件回调签名
 typedef void (*esp_at_event_cb_t)(const esp_at_event_payload_t *e, void *user);
 
-// WiFi 状态（cached + AT+CWSTATE? 两路都用）
+// WiFi 状态（缓存和 AT+CWSTATE? 共用）。
 typedef enum {
     ESP_AT_WIFI_IDLE          = 0,
     ESP_AT_WIFI_CONNECTING    = 1,   // 仅 AT+CWSTATE? 反映（ESP32 正在 join）

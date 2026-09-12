@@ -12,18 +12,18 @@
 
 #include "stm_log.h"
 
-// CMSIS-RTOS 2 API：HAL_Delay 不让出 CPU 时用它让出
+// CMSIS-RTOS 2 API：HAL_Delay 不会让出 CPU，因此使用该接口主动让出。
 extern void osDelay(uint32_t ms);
 
 #define ESP_AT_MQTT_TAG "mqtt"
 
-// MQTT 初始化（占位）
+// MQTT 初始化（占位）。
 esp_at_err_t esp_at_mqtt_init(void)
 {
     return ESP_AT_OK;
 }
 
-// MQTT 连接：残留清理 → USERCFG → CONNCFG → CONN + 等 2s 让 broker 注册订阅
+// MQTT 连接：清理残留 → USERCFG → CONNCFG → CONN，并等待 2 秒让 broker 完成订阅注册。
 esp_at_err_t esp_at_mqtt_connect(const esp_at_mqtt_user_cfg_t *uc,
                                  const esp_at_mqtt_conn_cfg_t *cc,
                                  const char *host, uint16_t port,
@@ -35,7 +35,7 @@ esp_at_err_t esp_at_mqtt_connect(const esp_at_mqtt_user_cfg_t *uc,
     at_cmd_response_t r = {0};
 
     {
-        esp_at_err_t ce = esp_at_cmd_send_sync("AT+MQTTCLEAN=0", &r, 5000);  // 残留清理：上次没正常 CLEAN 时此步必要
+        esp_at_err_t ce = esp_at_cmd_send_sync("AT+MQTTCLEAN=0", &r, 5000);  // 清理上次未正常关闭的连接。
         LOGI(ESP_AT_MQTT_TAG, "MQTTCLEAN pre-clean: rc=%d", (int)ce);
     }
 
@@ -76,7 +76,7 @@ esp_at_err_t esp_at_mqtt_connect(const esp_at_mqtt_user_cfg_t *uc,
     e = esp_at_client_send_sync(line, &r, timeout_ms);
     if (e == ESP_AT_OK) {
         LOGI(ESP_AT_MQTT_TAG, "MQTTCONN to %s:%u ok", host, (unsigned)port);
-        /* MQTTCONN OK ≠ broker 真订阅能力 ready；不等会丢 broker 注册 → 下行永不达 */
+        /* MQTTCONN 返回 OK 不代表 broker 已完成订阅注册；不等待会导致下行消息丢失。 */
         LOGI(ESP_AT_MQTT_TAG, "waiting 2s for ESP-AT MQTT state to settle...");
         HAL_Delay(2000);
     } else {
@@ -85,7 +85,7 @@ esp_at_err_t esp_at_mqtt_connect(const esp_at_mqtt_user_cfg_t *uc,
     return e;
 }
 
-// MQTT 发布（小 payload 走 PUB，>200B 切到 RAW）
+    // MQTT 发布（小负载走 PUB，>200B 切换到 RAW）。
 esp_at_err_t esp_at_mqtt_publish(uint8_t link_id, const char *topic,
                                  const uint8_t *data, uint16_t len,
                                  uint8_t qos, uint8_t retain,
@@ -104,7 +104,7 @@ esp_at_err_t esp_at_mqtt_publish(uint8_t link_id, const char *topic,
     return esp_at_client_send_sync(line, &r, timeout_ms);
 }
 
-// MQTT 长 payload 发布（MQTTPUBRAW）
+    // MQTT 长负载发布（MQTTPUBRAW）。
 esp_at_err_t esp_at_mqtt_publish_raw(uint8_t link_id, const char *topic,
                                      const uint8_t *data, uint16_t len,
                                      uint8_t qos, uint8_t retain,
@@ -117,7 +117,7 @@ esp_at_err_t esp_at_mqtt_publish_raw(uint8_t link_id, const char *topic,
              "AT+MQTTPUBRAW=%u,\"%s\",%u,%u,%u",
              link_id, topic, (unsigned)len, qos, retain);
 
-    // TODO: DATA_PROMPT ('>') 处理：先 link.write 再等 +MQTTPUB:OK/FAIL
+    // TODO：处理 DATA_PROMPT ('>')：先 link.write，再等待 +MQTTPUB:OK/FAIL。
     esp_at_err_t e = esp_at_client_send_sync(line, &r, timeout_ms);
     if (e == ESP_AT_OK) {
         extern esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms);
@@ -126,7 +126,7 @@ esp_at_err_t esp_at_mqtt_publish_raw(uint8_t link_id, const char *topic,
     return e;
 }
 
-// MQTT 订阅（下行通过 ESP_AT_EVENT_MQTT_MESSAGE 回调）
+    // MQTT 订阅（下行通过 ESP_AT_EVENT_MQTT_MESSAGE 回调）。
 esp_at_err_t esp_at_mqtt_subscribe(uint8_t link_id, const char *topic, uint8_t qos,
                                    esp_at_mqtt_data_cb_t cb, void *user,
                                    uint32_t timeout_ms)
@@ -138,7 +138,7 @@ esp_at_err_t esp_at_mqtt_subscribe(uint8_t link_id, const char *topic, uint8_t q
     return esp_at_client_send_sync(line, &r, timeout_ms);
 }
 
-// MQTT 取消订阅
+    // MQTT 取消订阅。
 esp_at_err_t esp_at_mqtt_unsubscribe(uint8_t link_id, const char *topic, uint32_t timeout_ms)
 {
     char line[160];
@@ -147,7 +147,7 @@ esp_at_err_t esp_at_mqtt_unsubscribe(uint8_t link_id, const char *topic, uint32_
     return esp_at_client_send_sync(line, &r, timeout_ms);
 }
 
-// MQTT 断开（MQTTCLEAN）
+    // MQTT 断开（MQTTCLEAN）。
 esp_at_err_t esp_at_mqtt_disconnect(uint8_t link_id)
 {
     char line[24];
@@ -156,7 +156,7 @@ esp_at_err_t esp_at_mqtt_disconnect(uint8_t link_id)
     return esp_at_client_send_sync(line, &r, 5000);
 }
 
-// 查询 MQTT 连接状态
+    // 查询 MQTT 连接状态。
 bool esp_at_mqtt_is_connected(void)
 {
     return esp_at_client_get()->mqtt_connected;

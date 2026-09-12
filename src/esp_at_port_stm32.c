@@ -20,7 +20,7 @@ static volatile bool       s_uart_started;
 
 static uint8_t  s_rx_dma_buf[ESP_AT_UART_RX_BUF_SZ];
 
-// DMA TX + 阻塞等 TC
+// DMA TX，并阻塞等待传输完成。
 esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms)
 {
     if (!s_uart_started || !s_huart || !data || size == 0) return ESP_AT_ERR_NOT_READY;
@@ -34,7 +34,7 @@ esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint3
     return ESP_AT_OK;
 }
 
-// 启动 UART DMA + IDLE 中断
+// 启动 UART DMA 和 IDLE 中断。
 esp_at_err_t esp_at_port_uart_start(const esp_at_port_config_t *cfg)
 {
     if (!cfg || !cfg->huart) return ESP_AT_ERR_INVALID_ARG;
@@ -93,7 +93,7 @@ void esp_at_port_uart_stop(void)
     s_hdma_tx = NULL;
 }
 
-// USART2 中断入口转发（HAL_UARTEx_RxEventCallback 走到这里）
+// 转发 USART2 中断入口（HAL_UARTEx_RxEventCallback 从这里进入）。
 void esp_at_port_uart_irq_handler(UART_HandleTypeDef *huart)
 {
     if (s_uart_started && huart && s_huart && huart->Instance == s_huart->Instance) {
@@ -101,7 +101,7 @@ void esp_at_port_uart_irq_handler(UART_HandleTypeDef *huart)
     }
 }
 
-// IDLE / 全填充回调：写 rx_rb + 唤醒 rx_task + 重开下一段
+// IDLE / 缓冲区填满回调：写入 rx_rb、唤醒 rx_task 并重启下一段接收。
 void esp_at_port_uart_rx_event(UART_HandleTypeDef *huart, uint16_t size)
 {
     if (!s_uart_started || !s_huart || huart != s_huart || size == 0) return;
@@ -124,7 +124,7 @@ void esp_at_port_uart_rx_event(UART_HandleTypeDef *huart, uint16_t size)
     }
 }
 
-// TX 完成回调：通知 tx_task
+// TX 完成回调：通知 tx_task。
 void esp_at_port_uart_tx_cplt(UART_HandleTypeDef *huart)
 {
     if (s_uart_started && huart && huart == s_huart) {
@@ -144,7 +144,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     esp_at_port_uart_tx_cplt(huart);
 }
 
-// 调试：dump rx_rb 全部字节到 RTT
+// 调试：将 rx_rb 的全部字节转储到 RTT。
 void esp_at_port_uart_rx_dump(void)
 {
     extern esp_at_client_t g_esp_at_client;
@@ -171,7 +171,7 @@ void esp_at_port_uart_rx_dump(void)
     LOGD(ESP_AT_PROTO_TAG, ">> asc[%u]: %s", avail, asc);
 }
 
-// HAL 同步发送：scheduler 损坏环境下的同步发送兜底（HAL_Delay 不依赖 FreeRTOS tick）
+// HAL 同步发送：调度器异常时的发送兜底（HAL_Delay 不依赖 FreeRTOS tick）。
 esp_at_port_rc_t esp_at_port_uart_send_and_wait(const char *cmd_line,
                                                  uint32_t wait_ms,
                                                  char *out_buf,
@@ -253,7 +253,7 @@ done:
     LOGD(ESP_AT_PROTO_TAG, "<< rc=%d, resp=%u bytes", (int)rc, (unsigned)pos);
     if (pos > 0 && pos < 200) {
         LOGD(ESP_AT_PROTO_TAG, ">> %s", out_buf);
-    } else if (pos >= 200) {                              // 长响应：截 head 64 字节
+    } else if (pos >= 200) {                              // 长响应：截取前 64 字节。
         char head[200];
         uint16_t n = (pos > 64) ? 64 : pos;
         for (uint16_t i = 0; i < n; i++) {

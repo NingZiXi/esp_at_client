@@ -16,7 +16,7 @@ typedef struct {
     void *hdma_tx;
 } uart_link_ctx_t;
 
-// 单调时钟 ms（HAL_GetTick）
+// 单调毫秒时钟（HAL_GetTick）。
 static uint32_t uart_link_millis(esp_at_link_t *self)
 {
     (void)self;
@@ -71,7 +71,7 @@ static int uart_link_peek(esp_at_link_t *self, uint8_t *dst, uint16_t len)
     return (int)ringbuffer_peek(&g_esp_at_client.rx_rb, dst, len);
 }
 
-// DMA TX（通过 esp_at_port_uart_transmit）
+// DMA TX（通过 esp_at_port_uart_transmit 发送）。
 static int uart_link_write(esp_at_link_t *self, const uint8_t *buf, uint16_t len, uint32_t timeout_ms)
 {
     (void)self;
@@ -90,7 +90,7 @@ const esp_at_link_ops_t esp_at_uart_link_ops = {
     .exit_critical   = uart_link_exit,
 };
 
-// 创建 UART link 实例
+// 创建 UART 链路实例。
 esp_at_link_t *esp_at_uart_link_create(void *huart, void *hdma_rx, void *hdma_tx)
 {
     static uart_link_ctx_t ctx;

@@ -39,7 +39,7 @@ static void on_any_event(const esp_at_event_payload_t *e, void *user)
     }
 }
 
-// 调用方负责 free resp.body
+// 由调用方负责释放 resp.body。
 static void run_http_get(void)
 {
     esp_at_http_resp_t resp = {0};
@@ -56,7 +56,7 @@ static void run_http_get(void)
     }
 }
 
-// POST body 里如果有双引号，esp_at_http_request 内部会自动转义为 \"
+// POST body 中如果有双引号，esp_at_http_request 内部会自动转义为 \"。
 static void run_http_post(void)
 {
     const char *body = "{\"device\":\"stm32\",\"value\":42}";

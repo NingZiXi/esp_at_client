@@ -40,7 +40,7 @@
 
 static const char *TAG = "demo";
 
-// ESP_AT_EVENT_ANY 通配：dispatcher 对每个事件多调一次 cbs_any
+// ESP_AT_EVENT_ANY 通配：分发器会对每个事件额外调用一次 cbs_any。
 static void on_any_event(const esp_at_event_payload_t *e, void *user)
 {
     (void)user;
@@ -124,7 +124,7 @@ void app_esp_at_mqtt_demo_run(const esp_at_port_config_t *port_cfg)
         LOGI(TAG, "subscribed to %s", DEMO_MQTT_TOPIC_SUB);
     }
 
-    // 周期 publish：2 秒一帧
+    // 周期发布：每 2 秒一帧。
     uint32_t tick = 0;
     for (;;) {
         char payload[64];
