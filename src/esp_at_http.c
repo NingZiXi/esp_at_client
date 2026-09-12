@@ -125,6 +125,15 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
         const char *comma = strchr(p_hdr, ',');
         const char *body_start = comma ? comma + 1 : NULL;
         if (sz > 0 && sz < 4096 && body_start) {
+            size_t body_available = (body_start < r.text + r.text_len)
+                ? (size_t)((r.text + r.text_len) - body_start) : 0U;
+            /* 响应文本可能被截断；禁止按声明长度越界读取。 */
+            if ((size_t)sz > body_available) {
+                LOGW(ESP_AT_HTTP_TAG,
+                     "HTTP body truncated: declared=%d available=%u",
+                     sz, (unsigned)body_available);
+                return ESP_AT_ERR_RESP;
+            }
             resp->body = (uint8_t *)pvPortMalloc((uint16_t)(sz + 1));
             if (resp->body) {
                 memcpy(resp->body, body_start, (uint16_t)sz);

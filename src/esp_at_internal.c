@@ -13,6 +13,7 @@
 #include "queue.h"
 #include "semphr.h"
 #include "event_groups.h"
+#include "esp_at_port_stm32.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -465,39 +466,82 @@ void esp_at_client_rx_task(void *arg)
             // 反复处理 rx_rb 顶部的 +IPD 帧（一次 notify 可能含多帧）
             bool ipd_handled = false;
             uint8_t peek[4];
-            while (ringbuffer_peek(&g_esp_at_client.rx_rb, peek, 4)
-                   && memcmp(peek, "+IPD", 4) == 0) {
-                char hdr[24];
-                uint16_t hi = 0;
-                while (hi < sizeof hdr - 1) {
-                    uint8_t b;
-                    if (!ringbuffer_read(&g_esp_at_client.rx_rb, &b, 1)) break;
-                    hdr[hi++] = (char)b;
-                    if (b == ':') break;
-                }
-                hdr[hi] = '\0';
-                const char *p = hdr + 4;
-                while (*p == ',' || *p == ' ') p++;
-                while (*p && *p != ',') p++;
-                while (*p == ',') p++;
-                int frame_len = atoi(p);
-                uint16_t write_off = g_esp_at_client.ipd_len;
-                if (frame_len <= 0 ||
-                    (uint32_t)write_off + (uint32_t)frame_len > sizeof g_esp_at_client.ipd_buf) {
-                    ESP_AT_LOGW("+IPD overflow: buffered=%u frame=%d",
-                                (unsigned)write_off, frame_len);
-                    break;
-                }
+            while (1) {
+                if (!g_esp_at_client.ipd_active) {
+                    if (!ringbuffer_peek(&g_esp_at_client.rx_rb, peek, 4)
+                        || memcmp(peek, "+IPD", 4) != 0) {
+                        break;
+                    }
 
-                uint32_t end_tick = HAL_GetTick() + 5000;
-                uint16_t got = 0;
-                while (got < (uint16_t)frame_len && HAL_GetTick() < end_tick) {
-                    uint8_t b;
-                    if (ringbuffer_read(&g_esp_at_client.rx_rb, &b, 1)) {
-                        g_esp_at_client.ipd_buf[write_off + got++] = b;
+                    /* 先窥读完整头部；头部跨 DMA 分段时不得提前消费。 */
+                    uint16_t avail = ringbuffer_available(&g_esp_at_client.rx_rb);
+                    uint16_t cap = (avail < 24U) ? avail : 24U;
+                    char hdr[24];
+                    uint16_t colon = UINT16_MAX;
+                    if (cap > 0) {
+                        ringbuffer_peek(&g_esp_at_client.rx_rb,
+                                        (uint8_t *)hdr, cap);
+                        for (uint16_t i = 0; i < cap; i++) {
+                            if (hdr[i] == ':') { colon = i; break; }
+                        }
+                    }
+                    if (colon == UINT16_MAX) {
+                        if (avail >= sizeof hdr - 1U) {
+                            ESP_AT_LOGW("malformed +IPD header, resync");
+                            ringbuffer_discard(&g_esp_at_client.rx_rb, 1);
+                            ipd_handled = true;
+                            continue;
+                        }
+                        break; /* 等待下一段 DMA 数据 */
+                    }
+
+                    uint16_t hdr_len = (uint16_t)(colon + 1U);
+                    ringbuffer_peek(&g_esp_at_client.rx_rb,
+                                    (uint8_t *)hdr, hdr_len);
+                    hdr[colon] = '\0';
+                    const char *last_comma = strrchr(hdr + 4, ',');
+                    int frame_len = last_comma ? atoi(last_comma + 1) : 0;
+                    ringbuffer_discard(&g_esp_at_client.rx_rb, hdr_len);
+                    if (frame_len <= 0 || (unsigned long)frame_len > UINT16_MAX) {
+                        ESP_AT_LOGW("invalid +IPD header: %s", hdr);
+                        ipd_handled = true;
+                        continue;
+                    }
+
+                    g_esp_at_client.ipd_active = true;
+                    g_esp_at_client.ipd_expected = (uint16_t)frame_len;
+                    g_esp_at_client.ipd_received = 0;
+                    g_esp_at_client.ipd_drop =
+                        ((uint32_t)g_esp_at_client.ipd_len +
+                         (uint32_t)frame_len > sizeof g_esp_at_client.ipd_buf);
+                    if (g_esp_at_client.ipd_drop) {
+                        ESP_AT_LOGW("+IPD overflow: buffered=%u frame=%d",
+                                    (unsigned)g_esp_at_client.ipd_len, frame_len);
                     }
                 }
-                g_esp_at_client.ipd_len = (uint16_t)(write_off + got);
+
+                uint16_t available = ringbuffer_available(&g_esp_at_client.rx_rb);
+                uint16_t remaining = (uint16_t)(g_esp_at_client.ipd_expected -
+                                                g_esp_at_client.ipd_received);
+                uint16_t take = (available < remaining) ? available : remaining;
+                if (take == 0) break; /* body 尚未收全，等待下一次 notify */
+
+                uint16_t write_off = g_esp_at_client.ipd_len;
+                if (!g_esp_at_client.ipd_drop) {
+                    ringbuffer_read(&g_esp_at_client.rx_rb,
+                                    g_esp_at_client.ipd_buf + write_off, take);
+                    g_esp_at_client.ipd_len = (uint16_t)(write_off + take);
+                } else {
+                    ringbuffer_discard(&g_esp_at_client.rx_rb, take);
+                }
+                g_esp_at_client.ipd_received = (uint16_t)(g_esp_at_client.ipd_received + take);
+                g_esp_at_client.ipd_active =
+                    (g_esp_at_client.ipd_received < g_esp_at_client.ipd_expected);
+                if (!g_esp_at_client.ipd_active) {
+                    g_esp_at_client.ipd_drop = false;
+                    g_esp_at_client.ipd_expected = 0;
+                    g_esp_at_client.ipd_received = 0;
+                }
                 ipd_handled = true;
             }
             if (ipd_handled) continue;
@@ -554,8 +598,20 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
     if (!g_esp_at_client.inited) return ESP_AT_ERR_NOT_READY;
     if (!cmd_line || !resp) return ESP_AT_ERR_INVALID_ARG;
 
-    if (g_esp_at_client.pending.resp) {
+    if (!g_esp_at_client.cmd_mutex ||
+        xSemaphoreTake(g_esp_at_client.cmd_mutex,
+                       timeout_ms ? pdMS_TO_TICKS(timeout_ms) : portMAX_DELAY) != pdTRUE) {
         return ESP_AT_ERR_BUSY;
+    }
+
+    if (g_esp_at_client.pending.resp) {
+        xSemaphoreGive(g_esp_at_client.cmd_mutex);
+        return ESP_AT_ERR_BUSY;
+    }
+
+    /* 清除上一次超时后迟到响应留下的完成信号，避免误完成新事务。 */
+    while (xSemaphoreTake(g_esp_at_client.cmd_done_sem, 0) == pdTRUE) {
+        /* drain */
     }
 
     memset(resp, 0, sizeof *resp);
@@ -569,6 +625,7 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
     size_t raw_len = strlen(cmd_line);
     if (raw_len + 2U > ESP_AT_CMD_MAX) {
         g_esp_at_client.pending.resp = NULL;
+        xSemaphoreGive(g_esp_at_client.cmd_mutex);
         return ESP_AT_ERR_INVALID_ARG;
     }
     uint16_t cmd_len = (uint16_t)raw_len;
@@ -582,6 +639,7 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
     int rc = ESP_AT_LINK_WRITE(g_esp_at_client.link, buf, total, timeout_ms);
     if (rc < 0) {
         g_esp_at_client.pending.resp = NULL;
+        xSemaphoreGive(g_esp_at_client.cmd_mutex);
         return ESP_AT_ERR_FAIL;
     }
     g_esp_at_client.state = ESP_AT_STATE_WAITING;
@@ -592,12 +650,15 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
     if (xSemaphoreTake(g_esp_at_client.cmd_done_sem, ticks_to_wait) != pdTRUE) {
         g_esp_at_client.pending.resp = NULL;
         g_esp_at_client.state = ESP_AT_STATE_IDLE;
+        xSemaphoreGive(g_esp_at_client.cmd_mutex);
         return ESP_AT_ERR_TIMEOUT;
     }
-    if (resp->status == AT_RESP_OK)    return ESP_AT_OK;
-    if (resp->status == AT_RESP_BUSY)  return ESP_AT_ERR_BUSY;
-    if (resp->status == AT_RESP_TIMEOUT) return ESP_AT_ERR_TIMEOUT;
-    return ESP_AT_ERR_RESP;
+    esp_at_err_t result = ESP_AT_ERR_RESP;
+    if (resp->status == AT_RESP_OK) result = ESP_AT_OK;
+    else if (resp->status == AT_RESP_BUSY) result = ESP_AT_ERR_BUSY;
+    else if (resp->status == AT_RESP_TIMEOUT) result = ESP_AT_ERR_TIMEOUT;
+    xSemaphoreGive(g_esp_at_client.cmd_mutex);
+    return result;
 }
 
 // 客户端初始化：分配 ringbuffer / 同步原语
@@ -616,14 +677,25 @@ esp_at_err_t esp_at_client_init(esp_at_link_t *link)
                     g_esp_at_client.rx_storage, ESP_AT_RINGBUFFER_SZ);
 
     g_esp_at_client.cmd_done_sem = xSemaphoreCreateBinary();
-    if (!g_esp_at_client.cmd_done_sem) return ESP_AT_ERR_NO_MEM;
+    if (!g_esp_at_client.cmd_done_sem) goto fail;
+    g_esp_at_client.cmd_mutex = xSemaphoreCreateMutex();
+    if (!g_esp_at_client.cmd_mutex) goto fail;
     g_esp_at_client.urc_queue = xQueueCreate(8, sizeof(esp_at_event_payload_t *));
-    if (!g_esp_at_client.urc_queue) return ESP_AT_ERR_NO_MEM;
+    if (!g_esp_at_client.urc_queue) goto fail;
     g_esp_at_client.boot_eg = xEventGroupCreate();
-    if (!g_esp_at_client.boot_eg) return ESP_AT_ERR_NO_MEM;
+    if (!g_esp_at_client.boot_eg) goto fail;
 
     g_esp_at_client.inited = true;
     return ESP_AT_OK;
+
+fail:
+    if (g_esp_at_client.boot_eg) vEventGroupDelete(g_esp_at_client.boot_eg);
+    if (g_esp_at_client.urc_queue) vQueueDelete(g_esp_at_client.urc_queue);
+    if (g_esp_at_client.cmd_mutex) vSemaphoreDelete(g_esp_at_client.cmd_mutex);
+    if (g_esp_at_client.cmd_done_sem) vSemaphoreDelete(g_esp_at_client.cmd_done_sem);
+    if (g_esp_at_client.rx_storage) vPortFree(g_esp_at_client.rx_storage);
+    memset(&g_esp_at_client, 0, sizeof g_esp_at_client);
+    return ESP_AT_ERR_NO_MEM;
 }
 
 // 启动 rx / tx / evt 任务
@@ -656,10 +728,18 @@ void esp_at_client_start_tasks(void)
 esp_at_err_t esp_at_client_deinit(void)
 {
     if (!g_esp_at_client.inited) return ESP_AT_OK;
-    if (g_esp_at_client.rx_task_h) vTaskDelete(g_esp_at_client.rx_task_h);
-    if (g_esp_at_client.tx_task_h) vTaskDelete(g_esp_at_client.tx_task_h);
-    if (g_esp_at_client.evt_task_h) vTaskDelete(g_esp_at_client.evt_task_h);
+    esp_at_port_uart_stop();
+    TaskHandle_t rx_task = g_esp_at_client.rx_task_h;
+    TaskHandle_t tx_task = g_esp_at_client.tx_task_h;
+    TaskHandle_t evt_task = g_esp_at_client.evt_task_h;
+    g_esp_at_client.rx_task_h = NULL;
+    g_esp_at_client.tx_task_h = NULL;
+    g_esp_at_client.evt_task_h = NULL;
+    if (rx_task) vTaskDelete(rx_task);
+    if (tx_task) vTaskDelete(tx_task);
+    if (evt_task) vTaskDelete(evt_task);
     if (g_esp_at_client.cmd_done_sem) vSemaphoreDelete(g_esp_at_client.cmd_done_sem);
+    if (g_esp_at_client.cmd_mutex) vSemaphoreDelete(g_esp_at_client.cmd_mutex);
     if (g_esp_at_client.urc_queue) vQueueDelete(g_esp_at_client.urc_queue);
     if (g_esp_at_client.boot_eg) vEventGroupDelete(g_esp_at_client.boot_eg);
     if (g_esp_at_client.rx_storage) vPortFree(g_esp_at_client.rx_storage);

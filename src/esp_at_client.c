@@ -51,6 +51,8 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
     e = esp_at_port_uart_start(port_cfg);                          // 启动 UART DMA + IDLE
     if (e != ESP_AT_OK) {
         LOGE(ESP_AT_INIT_TAG, "uart_start failed (%d)", e);
+        esp_at_client_deinit();
+        s_port_cfg = NULL;
         return e;
     }
 

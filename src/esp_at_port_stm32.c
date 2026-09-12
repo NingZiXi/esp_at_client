@@ -16,13 +16,14 @@
 static UART_HandleTypeDef *s_huart;
 static DMA_HandleTypeDef  *s_hdma_rx;
 static DMA_HandleTypeDef  *s_hdma_tx;
+static volatile bool       s_uart_started;
 
 static uint8_t  s_rx_dma_buf[ESP_AT_UART_RX_BUF_SZ];
 
 // DMA TX + 阻塞等 TC
 esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms)
 {
-    if (!s_huart) return ESP_AT_ERR_NOT_READY;
+    if (!s_uart_started || !s_huart || !data || size == 0) return ESP_AT_ERR_NOT_READY;
     HAL_StatusTypeDef st = HAL_UART_Transmit_DMA(s_huart, (uint8_t *)data, size);
     if (st != HAL_OK) return ESP_AT_ERR_FAIL;
 
@@ -37,6 +38,7 @@ esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint3
 esp_at_err_t esp_at_port_uart_start(const esp_at_port_config_t *cfg)
 {
     if (!cfg || !cfg->huart) return ESP_AT_ERR_INVALID_ARG;
+    if (s_uart_started) return ESP_AT_ERR_BUSY;
     s_huart   = cfg->huart;
     s_hdma_rx = cfg->hdma_rx;
     s_hdma_tx = cfg->hdma_tx;
@@ -52,21 +54,49 @@ esp_at_err_t esp_at_port_uart_start(const esp_at_port_config_t *cfg)
     if (s_hdma_rx) {
         HAL_StatusTypeDef st = HAL_UARTEx_ReceiveToIdle_DMA(s_huart, s_rx_dma_buf, sizeof s_rx_dma_buf);
         LOGI("port", "ReceiveToIdle_DMA -> %d", (int)st);
-        if (st != HAL_OK) return ESP_AT_ERR_FAIL;
+        if (st != HAL_OK) {
+            s_huart = NULL;
+            s_hdma_rx = NULL;
+            s_hdma_tx = NULL;
+            return ESP_AT_ERR_FAIL;
+        }
         __HAL_DMA_DISABLE_IT(s_hdma_rx, DMA_IT_HT);
     } else {
         HAL_StatusTypeDef st = HAL_UARTEx_ReceiveToIdle_IT(s_huart, s_rx_dma_buf, sizeof s_rx_dma_buf);
         LOGI("port", "ReceiveToIdle_IT -> %d", (int)st);
-        if (st != HAL_OK) return ESP_AT_ERR_FAIL;
+        if (st != HAL_OK) {
+            s_huart = NULL;
+            s_hdma_rx = NULL;
+            s_hdma_tx = NULL;
+            return ESP_AT_ERR_FAIL;
+        }
     }
-
+    s_uart_started = true;
     return ESP_AT_OK;
+}
+
+void esp_at_port_uart_stop(void)
+{
+    UART_HandleTypeDef *huart = s_huart;
+    /* 先禁止回调逻辑，再停止 HAL，避免回调触碰即将释放的 ringbuffer。 */
+    s_uart_started = false;
+    if (huart) {
+        if (s_hdma_rx || s_hdma_tx) {
+            (void)HAL_UART_DMAStop(huart);
+        } else {
+            (void)HAL_UART_AbortReceive_IT(huart);
+            (void)HAL_UART_AbortTransmit_IT(huart);
+        }
+    }
+    s_huart = NULL;
+    s_hdma_rx = NULL;
+    s_hdma_tx = NULL;
 }
 
 // USART2 中断入口转发（HAL_UARTEx_RxEventCallback 走到这里）
 void esp_at_port_uart_irq_handler(UART_HandleTypeDef *huart)
 {
-    if (huart && huart->Instance == s_huart->Instance) {
+    if (s_uart_started && huart && s_huart && huart->Instance == s_huart->Instance) {
         HAL_UART_IRQHandler(huart);
     }
 }
@@ -74,7 +104,7 @@ void esp_at_port_uart_irq_handler(UART_HandleTypeDef *huart)
 // IDLE / 全填充回调：写 rx_rb + 唤醒 rx_task + 重开下一段
 void esp_at_port_uart_rx_event(UART_HandleTypeDef *huart, uint16_t size)
 {
-    if (huart != s_huart || size == 0) return;
+    if (!s_uart_started || !s_huart || huart != s_huart || size == 0) return;
 
     uint16_t written = ringbuffer_write(&g_esp_at_client.rx_rb, s_rx_dma_buf, size);
     if (written != size) {
@@ -83,7 +113,7 @@ void esp_at_port_uart_rx_event(UART_HandleTypeDef *huart, uint16_t size)
     }
 
     esp_at_client_notify_rx();
-    if (s_hdma_rx) {
+    if (s_uart_started && s_hdma_rx) {
         HAL_StatusTypeDef st = HAL_UARTEx_ReceiveToIdle_DMA(
             s_huart, s_rx_dma_buf, sizeof s_rx_dma_buf);
         if (st == HAL_OK) {
@@ -97,7 +127,7 @@ void esp_at_port_uart_rx_event(UART_HandleTypeDef *huart, uint16_t size)
 // TX 完成回调：通知 tx_task
 void esp_at_port_uart_tx_cplt(UART_HandleTypeDef *huart)
 {
-    if (huart == s_huart) {
+    if (s_uart_started && huart && huart == s_huart) {
         esp_at_client_notify_tx();
     }
 }
@@ -147,7 +177,9 @@ esp_at_port_rc_t esp_at_port_uart_send_and_wait(const char *cmd_line,
                                                  char *out_buf,
                                                  uint16_t out_buf_sz)
 {
-    if (!cmd_line || !out_buf || out_buf_sz < 8) return ESP_AT_PORT_RC_INVALID;
+    if (!s_uart_started || !s_huart || !cmd_line || !out_buf || out_buf_sz < 8) {
+        return ESP_AT_PORT_RC_INVALID;
+    }
 
     extern esp_at_client_t g_esp_at_client;
     ringbuffer_t *rb = &g_esp_at_client.rx_rb;

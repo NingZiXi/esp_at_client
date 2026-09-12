@@ -30,6 +30,11 @@
 #define ESP_AT_RINGBUFFER_SZ     2048        // 必须 2 的幂
 #endif
 
+// raw TCP +IPD 单帧缓存；应覆盖 HTTP 头和一个 OTA 数据分片
+#ifndef ESP_AT_IPD_BUF_SZ
+#define ESP_AT_IPD_BUF_SZ       4096
+#endif
+
 #ifndef ESP_AT_LINE_MAX
 #define ESP_AT_LINE_MAX          256         // 行缓冲上限
 #endif

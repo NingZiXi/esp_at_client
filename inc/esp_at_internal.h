@@ -69,12 +69,17 @@ typedef struct esp_at_client {
     TaskHandle_t      evt_task_h;
     QueueHandle_t     urc_queue;
     SemaphoreHandle_t cmd_done_sem;
+    SemaphoreHandle_t cmd_mutex;                 // 串行化同步 AT 命令事务
     EventGroupHandle_t boot_eg;
 
     // 独立 +IPD buffer（raw TCP data）：rx_task 按 <len> 整读写入，不进 rx_rb
-    uint8_t          ipd_buf[2048];
+    uint8_t          ipd_buf[ESP_AT_IPD_BUF_SZ];
     volatile uint16_t ipd_len;
     volatile uint16_t ipd_consumed;
+    bool             ipd_active;
+    bool             ipd_drop;
+    uint16_t         ipd_expected;
+    uint16_t         ipd_received;
 #define BOOT_READY_BIT  (1u << 0)
 
 // AT 通信细节统一 tag：所有 << TX / >> RX 原始数据用此

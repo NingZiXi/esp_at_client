@@ -72,6 +72,13 @@ esp_at_err_t  esp_at_esp_port_boot     (const esp_at_port_config_t *cfg, uint32_
 esp_at_err_t esp_at_port_uart_start(const esp_at_port_config_t *cfg);
 
 /**
+ * @brief 停止 UART 接收/发送并清除端口句柄
+ *
+ * 必须在释放客户端 ringbuffer 前调用，避免 DMA/中断回调访问失效对象。
+ */
+void          esp_at_port_uart_stop(void);
+
+/**
  * @brief USART2 中断入口转发（由 stm32f4xx_it.c 调用）
  *
  * @param huart  HAL UART 句柄
