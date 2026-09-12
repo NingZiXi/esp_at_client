@@ -524,7 +524,7 @@ void esp_at_client_rx_task(void *arg)
                 uint16_t remaining = (uint16_t)(g_esp_at_client.ipd_expected -
                                                 g_esp_at_client.ipd_received);
                 uint16_t take = (available < remaining) ? available : remaining;
-                if (take == 0) break; /* body 尚未收全，等待下一次 notify */
+                if (take == 0) break; /* body 尚未收全，等待下一次通知 */
 
                 uint16_t write_off = g_esp_at_client.ipd_len;
                 if (!g_esp_at_client.ipd_drop) {
@@ -611,7 +611,7 @@ esp_at_err_t esp_at_client_send_sync(const char *cmd_line,
 
     /* 清除上一次超时后迟到响应留下的完成信号，避免误完成新事务。 */
     while (xSemaphoreTake(g_esp_at_client.cmd_done_sem, 0) == pdTRUE) {
-        /* drain */
+        /* 清空 */
     }
 
     memset(resp, 0, sizeof *resp);
