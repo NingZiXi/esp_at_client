@@ -29,7 +29,10 @@ esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint3
 
     uint32_t deadline = HAL_GetTick() + timeout_ms;
     while (__HAL_UART_GET_FLAG(s_huart, UART_FLAG_TC) == RESET) {
-        if (HAL_GetTick() >= deadline) return ESP_AT_ERR_TIMEOUT;
+        if (HAL_GetTick() >= deadline) {
+            (void)HAL_UART_AbortTransmit(s_huart);
+            return ESP_AT_ERR_TIMEOUT;
+        }
     }
     return ESP_AT_OK;
 }

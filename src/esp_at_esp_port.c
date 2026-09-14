@@ -58,7 +58,9 @@ void esp_at_esp_port_reset(const esp_at_port_config_t *cfg)
 void esp_at_esp_port_power_off(const esp_at_port_config_t *cfg)
 {
     if (!cfg) return;
-    HAL_GPIO_WritePin(cfg->en_port, cfg->en_pin, GPIO_PIN_RESET);
+    if (cfg->en_port) {
+        HAL_GPIO_WritePin(cfg->en_port, cfg->en_pin, GPIO_PIN_RESET);
+    }
 }
 
 // 硬复位 ESP32：拉低 EN 100ms → 拉高 → 等 boot 8s

@@ -64,10 +64,21 @@ static int http_find_header_end(const uint8_t *data, uint16_t len)
 static int http_parse_content_length(const uint8_t *data, uint16_t header_len)
 {
     static const char key[] = "Content-Length:";
-    for (uint16_t i = 0; i + sizeof key - 1 < header_len; i++) {
-        if (memcmp(data + i, key, sizeof key - 1) == 0) {
-            const char *p = (const char *)data + i + sizeof key - 1;
-            return atoi(p);
+    const uint16_t key_len = (uint16_t)(sizeof key - 1U);
+    for (uint16_t i = 0; i + key_len <= header_len; i++) {
+        if (memcmp(data + i, key, key_len) == 0) {
+            uint16_t p = (uint16_t)(i + key_len);
+            while (p < header_len && (data[p] == ' ' || data[p] == '\t')) p++;
+            if (p == header_len || data[p] < '0' || data[p] > '9') return -1;
+            uint32_t value = 0U;
+            while (p < header_len && data[p] >= '0' && data[p] <= '9') {
+                uint32_t digit = (uint32_t)(data[p++] - '0');
+                if (value > (UINT32_MAX - digit) / 10U) return -1;
+                value = value * 10U + digit;
+                if (value > INT32_MAX) return -1;
+            }
+            if (p < header_len && data[p] != '\r' && data[p] != '\n') return -1;
+            return (int)value;
         }
     }
     return -1;
@@ -157,7 +168,10 @@ esp_at_err_t esp_at_tcp_http_get_range(esp_at_tcp_t *tcp,
                                        uint32_t offset, uint32_t len,
                                        uint32_t timeout_ms)
 {
-    if (!tcp || !tcp->connected || !host || !path) return ESP_AT_ERR_INVALID_ARG;
+    if (!tcp || !tcp->connected || !host || !path || len == 0U
+        || offset > UINT32_MAX - (len - 1U)) {
+        return ESP_AT_ERR_INVALID_ARG;
+    }
 
     // 拼接 HTTP/1.1 GET 请求。
     char req[256];

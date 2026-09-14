@@ -268,21 +268,28 @@ static void handle_line_mqtt_urc(const char *line)
             }
         }
 
-        /* strrchr/strtol 必须在写入 '\0' 前完成，否则修改 q2 后字符串会被截断。 */
-        const char *last = strrchr(line, ',');
-        if (last) {
-            const char *prev = NULL;
-            for (const char *s = line; s < last; s++) {
-                if (*s == ',') prev = s;
-            }
-            if (prev) {
-                int len = (int)strtol(prev + 1, NULL, 10);
-                p.data_len = (uint16_t)len;
-                p.data = (const uint8_t *)(last + 1);
+        /* 长度字段位于 topic 结束引号后的第一个逗号之后；不能用
+           strrchr，因为 payload 本身允许包含逗号。 */
+        const char *len_sep = q2 ? strchr(q2 + 1, ',') : NULL;
+        const char *data_sep = NULL;
+        if (len_sep) {
+            char *end = NULL;
+            unsigned long declared = strtoul(len_sep + 1, &end, 10);
+            if (end != len_sep + 1 && *end == ',') {
+                data_sep = end;
+                size_t available = strlen(data_sep + 1);
+                if (declared <= UINT16_MAX && declared <= available) {
+                    p.data_len = (uint16_t)declared;
+                    p.data = (const uint8_t *)(data_sep + 1);
+                }
             }
         }
 
-        if (q2) *(char *)q2 = '\0';                 // 让 topic 终止，data 用 %.*s 限长打印
+        if (!q2 || !len_sep || !p.data) {
+            ESP_AT_LOGW("malformed +MQTTSUBRECV, drop");
+            return;
+        }
+        *(char *)q2 = '\0';                       // 让 topic 终止
         esp_at_client_post_event(ESP_AT_EVENT_MQTT_MESSAGE, &p);
         return;
     }
