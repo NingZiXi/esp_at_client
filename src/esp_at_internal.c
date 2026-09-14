@@ -418,6 +418,7 @@ static void process_line(char *line, uint16_t len)
         return;
     }
     if (line[0] == '>') {                          // DATA_PROMPT → RAW_TX。
+        g_esp_at_client.data_prompt_seen = true;
         g_esp_at_client.state = ESP_AT_STATE_DATA_PROMPT;
         return;
     }

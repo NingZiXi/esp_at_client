@@ -20,17 +20,12 @@
 #define ESP_AT_TCP_TAG       "tcp"
 #define ESP_AT_TCP_LINK_ID   1           // MQTT 占用 link_id=0，新 TCP 用 1，启用多连接模式
 
-static bool s_mux_enabled;
-
 // 在 MQTT 等连接建立前启用多连接模式。
 esp_at_err_t esp_at_tcp_init(void)
 {
-    if (s_mux_enabled) return ESP_AT_OK;
-
     at_cmd_response_t r = {0};
     esp_at_err_t e = esp_at_cmd_send_sync("AT+CIPMUX?", &r, 2000);
     if (e == ESP_AT_OK && strstr(r.text, "+CIPMUX:1")) {
-        s_mux_enabled = true;
         LOGI(ESP_AT_TCP_TAG, "CIPMUX already enabled");
         return ESP_AT_OK;
     }
@@ -43,7 +38,6 @@ esp_at_err_t esp_at_tcp_init(void)
         return e;
     }
 
-    s_mux_enabled = true;
     LOGI(ESP_AT_TCP_TAG, "CIPMUX=1 enabled (multi-connection)");
     return ESP_AT_OK;
 }
@@ -90,6 +84,7 @@ static bool rx_wait_gt_prompt(uint32_t timeout_ms)
     ringbuffer_t *rb = &esp_at_client_get()->rx_rb;
     uint32_t deadline = HAL_GetTick() + timeout_ms;
     while (HAL_GetTick() < deadline) {
+        if (esp_at_client_get()->data_prompt_seen) return true;
         if (ringbuffer_find_char(rb, '>') >= 0) {
             uint8_t b;
             ringbuffer_read(rb, &b, 1);
@@ -196,6 +191,7 @@ esp_at_err_t esp_at_tcp_http_get_range(esp_at_tcp_t *tcp,
     char cmd[32];
     snprintf(cmd, sizeof cmd, "AT+CIPSEND=%u,%u", (unsigned)tcp->link_id, (unsigned)n);
     LOGI(ESP_AT_TCP_TAG, ">> %s", cmd);
+    esp_at_client_get()->data_prompt_seen = false;
     esp_at_err_t e = esp_at_cmd_send_only(cmd, 1000);
     if (e != ESP_AT_OK) {
         LOGW(ESP_AT_TCP_TAG, "CIPSEND send_only failed");

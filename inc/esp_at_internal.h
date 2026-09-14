@@ -51,6 +51,7 @@ typedef struct esp_at_client {
 
     at_pending_cmd_t  pending;                   // pending.resp==NULL 表示 IDLE
     bool              echo_pending;              // 等待 echo 回串
+    volatile bool     data_prompt_seen;          // 已收到 CIPSEND 的 '>' 提示
 
     const uint8_t    *raw_tx_buf;                // DATA_PROMPT/RAW_TX
     uint16_t          raw_tx_len;
