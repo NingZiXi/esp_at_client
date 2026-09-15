@@ -35,6 +35,11 @@
 #define ESP_AT_IPD_BUF_SZ       4096
 #endif
 
+// HTTPCLIENT 单次响应累计上限；响应对象在请求结束后把缓冲所有权交给调用者。
+#ifndef ESP_AT_HTTP_BODY_MAX
+#define ESP_AT_HTTP_BODY_MAX    2048
+#endif
+
 #ifndef ESP_AT_LINE_MAX
 #define ESP_AT_LINE_MAX          256         // 行缓冲上限
 #endif

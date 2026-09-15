@@ -243,10 +243,12 @@ static void handle_line_mqtt_urc(const char *line)
         return;
     }
     if (esp_at_match_prefix(line, "+MQTTPUB:OK")) {
+        g_esp_at_client.mqtt_pub_result = 1;
         esp_at_client_post_event(ESP_AT_EVENT_MQTT_PUB_OK, &p);
         return;
     }
     if (esp_at_match_prefix(line, "+MQTTPUB:FAIL")) {
+        g_esp_at_client.mqtt_pub_result = -1;
         esp_at_client_post_event(ESP_AT_EVENT_MQTT_PUB_FAIL, &p);
         return;
     }
@@ -422,6 +424,14 @@ static void process_line(char *line, uint16_t len)
         g_esp_at_client.state = ESP_AT_STATE_DATA_PROMPT;
         return;
     }
+    if (strcmp(line, "SET OK") == 0) {
+        g_esp_at_client.http_url_set_result = 1;
+        return;
+    }
+    if (strcmp(line, "SET ERROR") == 0) {
+        g_esp_at_client.http_url_set_result = -1;
+        return;
+    }
 
     if (g_esp_at_client.pending.resp) {
         if (strcmp(line, "OK") == 0) {
@@ -462,6 +472,185 @@ void esp_at_client_pump_rx(void)
     }
 }
 
+typedef enum {
+    MQTT_FRAME_NOT_FOUND = 0,
+    MQTT_FRAME_WAITING,
+    MQTT_FRAME_HANDLED,
+} mqtt_frame_result_t;
+
+/*
+ * 从 ringbuffer 按声明长度提取 +MQTTSUBRECV。
+ * payload 可以包含逗号和换行，不能交给普通的逐行解析器。
+ */
+static mqtt_frame_result_t try_handle_mqtt_frame(void)
+{
+    static const char prefix[] = "+MQTTSUBRECV:";
+    ringbuffer_t *rb = &g_esp_at_client.rx_rb;
+    const uint16_t available = ringbuffer_available(rb);
+    if (available < sizeof prefix - 1U) return MQTT_FRAME_NOT_FOUND;
+
+    char header[ESP_AT_LINE_MAX];
+    const uint16_t peek_len = available < sizeof header - 1U
+        ? available : (uint16_t)(sizeof header - 1U);
+    ringbuffer_peek(rb, (uint8_t *)header, peek_len);
+    header[peek_len] = '\0';
+    if (memcmp(header, prefix, sizeof prefix - 1U) != 0) {
+        return MQTT_FRAME_NOT_FOUND;
+    }
+
+    char *topic_begin = strchr(header, '"');
+    char *topic_end = topic_begin ? strchr(topic_begin + 1, '"') : NULL;
+    char *length_begin = topic_end ? strchr(topic_end + 1, ',') : NULL;
+    if (!topic_begin || !topic_end || !length_begin) {
+        if (available >= sizeof header - 1U) {
+            ringbuffer_discard(rb, 1U);
+            ESP_AT_LOGW("malformed +MQTTSUBRECV header, resync");
+            return MQTT_FRAME_HANDLED;
+        }
+        return MQTT_FRAME_WAITING;
+    }
+
+    ++length_begin;
+    char *length_end = NULL;
+    unsigned long declared = strtoul(length_begin, &length_end, 10);
+    if (length_end == length_begin || *length_end != ',' || declared > UINT16_MAX) {
+        ringbuffer_discard(rb, 1U);
+        ESP_AT_LOGW("invalid +MQTTSUBRECV length, resync");
+        return MQTT_FRAME_HANDLED;
+    }
+
+    const uint16_t data_offset = (uint16_t)((length_end + 1) - header);
+    const uint32_t total = (uint32_t)data_offset + (uint32_t)declared;
+    if (total > rb->size) {
+        ringbuffer_discard(rb, 1U);
+        ESP_AT_LOGW("+MQTTSUBRECV payload too large: %lu", declared);
+        return MQTT_FRAME_HANDLED;
+    }
+    if (available < total) return MQTT_FRAME_WAITING;
+
+    const size_t topic_len = (size_t)(topic_end - topic_begin - 1);
+    if (topic_len > UINT16_MAX) {
+        ringbuffer_discard(rb, (uint16_t)total);
+        return MQTT_FRAME_HANDLED;
+    }
+
+    uint8_t *data = NULL;
+    if (declared > 0U) {
+        data = (uint8_t *)pvPortMalloc((size_t)declared);
+        if (!data) {
+            ringbuffer_discard(rb, (uint16_t)total);
+            ESP_AT_LOGW("+MQTTSUBRECV no memory: %lu", declared);
+            return MQTT_FRAME_HANDLED;
+        }
+    }
+
+    char topic[128];
+    if (topic_len >= sizeof topic) {
+        if (data) vPortFree(data);
+        ringbuffer_discard(rb, (uint16_t)total);
+        ESP_AT_LOGW("+MQTTSUBRECV topic too long: %u", (unsigned)topic_len);
+        return MQTT_FRAME_HANDLED;
+    }
+    memcpy(topic, topic_begin + 1, topic_len);
+    topic[topic_len] = '\0';
+
+    ringbuffer_discard(rb, data_offset);
+    if (declared > 0U) {
+        ringbuffer_read(rb, data, (uint16_t)declared);
+    }
+
+    int link_id = 0;
+    (void)esp_at_extract_int(header, "+MQTTSUBRECV", &link_id);
+    esp_at_event_payload_t payload = {
+        .link_id = link_id,
+        .topic = topic,
+        .topic_len = (uint16_t)topic_len,
+        .data = data,
+        .data_len = (uint16_t)declared,
+    };
+    (void)esp_at_client_post_event(ESP_AT_EVENT_MQTT_MESSAGE, &payload);
+    if (data) vPortFree(data);
+    return MQTT_FRAME_HANDLED;
+}
+
+/* HTTPCLIENT 数据同样带声明长度，body 中可能出现换行和 NUL。 */
+static mqtt_frame_result_t try_handle_http_frame(void)
+{
+    static const char prefix[] = "+HTTPCLIENT:";
+    ringbuffer_t *rb = &g_esp_at_client.rx_rb;
+    const uint16_t available = ringbuffer_available(rb);
+    if (available < sizeof prefix - 1U) return MQTT_FRAME_NOT_FOUND;
+
+    char header[32];
+    const uint16_t peek_len = available < sizeof header - 1U
+        ? available : (uint16_t)(sizeof header - 1U);
+    ringbuffer_peek(rb, (uint8_t *)header, peek_len);
+    header[peek_len] = '\0';
+    if (memcmp(header, prefix, sizeof prefix - 1U) != 0) {
+        return MQTT_FRAME_NOT_FOUND;
+    }
+
+    char *size_begin = header + sizeof prefix - 1U;
+    char *size_end = NULL;
+    unsigned long declared = strtoul(size_begin, &size_end, 10);
+    if (size_end == size_begin) {
+        if (available >= sizeof header - 1U) {
+            ringbuffer_discard(rb, 1U);
+            return MQTT_FRAME_HANDLED;
+        }
+        return MQTT_FRAME_WAITING;
+    }
+    if (*size_end != ',' || declared > UINT16_MAX) {
+        ringbuffer_discard(rb, 1U);
+        ESP_AT_LOGW("invalid +HTTPCLIENT length, resync");
+        return MQTT_FRAME_HANDLED;
+    }
+
+    const uint16_t data_offset = (uint16_t)((size_end + 1) - header);
+    const uint32_t total = (uint32_t)data_offset + declared;
+    if (total > rb->size) {
+        ringbuffer_discard(rb, 1U);
+        g_esp_at_client.http_rx_overflow = true;
+        ESP_AT_LOGW("+HTTPCLIENT frame too large: %lu", declared);
+        return MQTT_FRAME_HANDLED;
+    }
+    if (available < total) return MQTT_FRAME_WAITING;
+
+    ringbuffer_discard(rb, data_offset);
+    const uint16_t chunk_len = (uint16_t)declared;
+    uint8_t *chunk = NULL;
+    if (chunk_len > 0U) {
+        chunk = (uint8_t *)pvPortMalloc(chunk_len);
+        if (!chunk) {
+            ringbuffer_discard(rb, chunk_len);
+            g_esp_at_client.http_rx_overflow = true;
+            return MQTT_FRAME_HANDLED;
+        }
+        ringbuffer_read(rb, chunk, chunk_len);
+    }
+
+    if (g_esp_at_client.http_rx_buf
+        && (uint32_t)g_esp_at_client.http_rx_len + chunk_len
+            <= ESP_AT_HTTP_BODY_MAX) {
+        if (chunk_len > 0U) {
+            memcpy(g_esp_at_client.http_rx_buf + g_esp_at_client.http_rx_len,
+                   chunk, chunk_len);
+        }
+        g_esp_at_client.http_rx_len =
+            (uint16_t)(g_esp_at_client.http_rx_len + chunk_len);
+    } else if (chunk_len > 0U) {
+        g_esp_at_client.http_rx_overflow = true;
+    }
+
+    esp_at_event_payload_t payload = {
+        .data = chunk,
+        .data_len = chunk_len,
+    };
+    (void)esp_at_client_post_event(ESP_AT_EVENT_HTTP_DONE, &payload);
+    if (chunk) vPortFree(chunk);
+    return MQTT_FRAME_HANDLED;
+}
+
 // RX 任务入口（未使用 FreeRTOS 任务参数）。
 void esp_at_client_rx_task(void *arg)
 {
@@ -471,6 +660,14 @@ void esp_at_client_rx_task(void *arg)
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         for (;;) {
+            mqtt_frame_result_t mqtt_frame = try_handle_mqtt_frame();
+            if (mqtt_frame == MQTT_FRAME_HANDLED) continue;
+            if (mqtt_frame == MQTT_FRAME_WAITING) break;
+
+            mqtt_frame_result_t http_frame = try_handle_http_frame();
+            if (http_frame == MQTT_FRAME_HANDLED) continue;
+            if (http_frame == MQTT_FRAME_WAITING) break;
+
             // 反复处理 rx_rb 顶部的 +IPD 帧（一次通知可能包含多帧）。
             bool ipd_handled = false;
             uint8_t peek[4];
@@ -707,9 +904,9 @@ fail:
 }
 
 // 启动 rx / tx / evt 任务
-void esp_at_client_start_tasks(void)
+esp_at_err_t esp_at_client_start_tasks(void)
 {
-    if (!g_esp_at_client.inited) return;
+    if (!g_esp_at_client.inited) return ESP_AT_ERR_NOT_READY;
 
     BaseType_t ok;
     ok = xTaskCreate(esp_at_client_rx_task, "at_rx",
@@ -717,19 +914,23 @@ void esp_at_client_start_tasks(void)
                      osPriorityAboveNormal, &g_esp_at_client.rx_task_h);
     if (ok != pdPASS) {
         ESP_AT_LOGE("rx task create failed");
+        return ESP_AT_ERR_NO_MEM;
     }
     ok = xTaskCreate(tx_task_entry, "at_tx",
                      ESP_AT_TASK_TX_STACK, NULL,
                      osPriorityAboveNormal, &g_esp_at_client.tx_task_h);
     if (ok != pdPASS) {
         ESP_AT_LOGE("tx task create failed");
+        return ESP_AT_ERR_NO_MEM;
     }
     ok = xTaskCreate(evt_task_entry, "at_evt",
                      ESP_AT_TASK_EVT_STACK, NULL,
                      osPriorityNormal, &g_esp_at_client.evt_task_h);
     if (ok != pdPASS) {
         ESP_AT_LOGE("evt task create failed");
+        return ESP_AT_ERR_NO_MEM;
     }
+    return ESP_AT_OK;
 }
 
 // 反初始化：删任务 / 删同步原语 / 释放内存
@@ -752,6 +953,7 @@ esp_at_err_t esp_at_client_deinit(void)
     if (g_esp_at_client.boot_eg) vEventGroupDelete(g_esp_at_client.boot_eg);
     if (g_esp_at_client.rx_storage) vPortFree(g_esp_at_client.rx_storage);
     if (g_esp_at_client.raw_rx_buf) vPortFree(g_esp_at_client.raw_rx_buf);
+    if (g_esp_at_client.http_rx_buf) vPortFree(g_esp_at_client.http_rx_buf);
     memset(&g_esp_at_client, 0, sizeof g_esp_at_client);
     return ESP_AT_OK;
 }

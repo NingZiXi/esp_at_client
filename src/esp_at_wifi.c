@@ -89,6 +89,8 @@ esp_at_err_t esp_at_wifi_query_state(esp_at_wifi_query_t *q, uint32_t timeout_ms
         case 4: q->state = ESP_AT_WIFI_LOST;       break;
         default: return ESP_AT_ERR_RESP;
     }
+    /* 主动查询是权威状态源；同步缓存，避免调用者随后读到过期 URC 状态。 */
+    esp_at_client_get()->wifi_state = q->state;
 
 // SSID 位于逗号后的第一个 "..." 中。
     const char *q1 = strchr(p, ',');

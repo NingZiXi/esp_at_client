@@ -95,6 +95,11 @@ typedef struct esp_at_client {
     esp_at_wifi_state_t wifi_state;              // 服务层查询
 
     bool               mqtt_connected;
+    volatile int8_t    mqtt_pub_result;          // 0=等待，1=成功，-1=失败
+    volatile int8_t    http_url_set_result;      // 0=等待，1=SET OK，-1=失败
+    uint8_t           *http_rx_buf;              // HTTPCLIENT 多帧响应累计
+    uint16_t           http_rx_len;
+    bool               http_rx_overflow;
     bool               inited;
 } esp_at_client_t;
 
@@ -124,8 +129,10 @@ esp_at_err_t esp_at_client_deinit (void);
 
 /**
  * @brief 启动 rx / tx / evt 任务
+ *
+ * @return ESP_AT_OK / ESP_AT_ERR_NO_MEM
  */
-void         esp_at_client_start_tasks(void);
+esp_at_err_t esp_at_client_start_tasks(void);
 
 /**
  * @brief RX 任务入口（行解析）

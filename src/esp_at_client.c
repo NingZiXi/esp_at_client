@@ -18,7 +18,8 @@
 #define CONFIG_OTA_TEST_AT_INIT_FAIL 0
 #endif
 
-static const esp_at_port_config_t *s_port_cfg;
+static esp_at_port_config_t s_port_cfg;
+static bool s_port_cfg_valid;
 
 // 按用户 config 宏应用库内 tag 日志级别
 static void apply_log_config_from_macros(void)
@@ -37,7 +38,8 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
 {
     if (!port_cfg) return ESP_AT_ERR_INVALID_ARG;
     apply_log_config_from_macros();
-    s_port_cfg = port_cfg;
+    s_port_cfg = *port_cfg;
+    s_port_cfg_valid = true;
 
     esp_at_link_t *link = esp_at_uart_link_create(                 // 创建 link（UART）
         port_cfg->huart, port_cfg->hdma_rx, port_cfg->hdma_tx);
@@ -52,7 +54,7 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
     if (e != ESP_AT_OK) {
         LOGE(ESP_AT_INIT_TAG, "uart_start failed (%d)", e);
         esp_at_client_deinit();
-        s_port_cfg = NULL;
+        s_port_cfg_valid = false;
         return e;
     }
 
@@ -61,19 +63,30 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
     esp_at_err_t init_result = ESP_AT_OK;
 
     {
-        const char *rst = "AT+RST\r\n";                            // 软件复位：清 MQTT 残留 / WiFi 卡死
-        extern esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms);
-        esp_at_port_uart_transmit((const uint8_t *)rst, 8, 1000);
-        LOGI(ESP_AT_INIT_TAG, "AT+RST sent, waiting 5s for boot");
-        HAL_Delay(5000);                                            // 等待 boot 完成并自动重连 WiFi
-        ringbuffer_discard(&g_esp_at_client.rx_rb,                 // 清 boot 期间的杂数据
-                           ringbuffer_available(&g_esp_at_client.rx_rb));
-    }
-
-    {
         char probe_buf[64];
         bool probe_ok = false;
-        // 3 次 AT 探针
+
+        /* 先探测当前模块。模块已经正常时保留 Wi-Fi 状态，也避免 reinit
+           连续执行 AT+RST 导致 ESP32 状态机不稳定。 */
+        esp_at_port_rc_t initial_rc = esp_at_port_uart_send_and_wait(
+            "AT", 1500, probe_buf, sizeof probe_buf);
+        if (initial_rc == ESP_AT_PORT_RC_OK) {
+            probe_ok = true;
+            LOGI(ESP_AT_INIT_TAG, "AT probe OK, skip software reset");
+        } else {
+            const char *rst = "AT+RST\r\n";
+            extern esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data,
+                                                           uint16_t size,
+                                                           uint32_t timeout_ms);
+            (void)esp_at_port_uart_transmit((const uint8_t *)rst, 8U, 1000U);
+            LOGW(ESP_AT_INIT_TAG, "initial AT probe failed (%d), soft reset and retry",
+                 (int)initial_rc);
+            HAL_Delay(5000U);
+            ringbuffer_discard(&g_esp_at_client.rx_rb,
+                               ringbuffer_available(&g_esp_at_client.rx_rb));
+        }
+
+        // 软复位后最多再做 3 次 AT 探针。
         for (int i = 0; i < 3 && !probe_ok; i++) {
             esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
                 "AT", 1500, probe_buf, sizeof probe_buf);
@@ -85,9 +98,9 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
             }
         }
 
-        if (!probe_ok && s_port_cfg->en_port) {
+        if (!probe_ok && s_port_cfg.en_port) {
             LOGW(ESP_AT_INIT_TAG, "3 probes failed → hard reset via EN");
-            esp_at_esp_port_hard_reset(s_port_cfg, 8000);
+            esp_at_esp_port_hard_reset(&s_port_cfg, 8000);
             esp_at_port_rc_t rc = esp_at_port_uart_send_and_wait(
                 "AT", 1500, probe_buf, sizeof probe_buf);
             if (rc == ESP_AT_PORT_RC_OK) {
@@ -119,7 +132,13 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
     }
 
     // 探测和 ATE0 均通过 HAL 同步完成后再启动任务，确保 ringbuffer 干净。
-    esp_at_client_start_tasks();                                    // rx/tx/evt 任务
+    e = esp_at_client_start_tasks();                                // rx/tx/evt 任务
+    if (e != ESP_AT_OK) {
+        LOGE(ESP_AT_INIT_TAG, "task start failed (%d)", (int)e);
+        esp_at_client_deinit();
+        s_port_cfg_valid = false;
+        return e;
+    }
 
 #if CONFIG_OTA_TEST_AT_INIT_FAIL
     LOGW(ESP_AT_INIT_TAG, "test fault injection: ESP-AT init forced to fail");
@@ -140,7 +159,11 @@ esp_at_err_t esp_at_init(const esp_at_port_config_t *port_cfg)
 esp_at_err_t esp_at_deinit(void)
 {
     esp_at_client_deinit();
-    esp_at_esp_port_power_off(s_port_cfg);
+    if (s_port_cfg_valid) {
+        esp_at_esp_port_power_off(&s_port_cfg);
+    }
+    memset(&s_port_cfg, 0, sizeof s_port_cfg);
+    s_port_cfg_valid = false;
     return ESP_AT_OK;
 }
 

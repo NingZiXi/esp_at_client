@@ -4,7 +4,10 @@
  */
 
 #include "esp_at_http.h"
+#include "esp_at_client.h"
 #include "esp_at_internal.h"
+#include "esp_at_link.h"
+#include "ringbuffer.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +17,58 @@
 
 #define ESP_AT_HTTP_TAG "http"
 #define HTTP_URL_PRESET_THRESHOLD  200
+
+static bool http_wait_data_prompt(uint32_t timeout_ms)
+{
+    ringbuffer_t *rb = &esp_at_client_get()->rx_rb;
+    const uint32_t start = HAL_GetTick();
+    while ((HAL_GetTick() - start) < timeout_ms) {
+        if (esp_at_client_get()->data_prompt_seen) return true;
+        const int prompt_pos = ringbuffer_find_char(rb, '>');
+        if (prompt_pos >= 0) {
+            ringbuffer_discard(rb, (uint16_t)(prompt_pos + 1));
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1U));
+    }
+    return false;
+}
+
+static esp_at_err_t http_configure_long_url(const char *url, uint32_t timeout_ms)
+{
+    char command[48];
+    const size_t url_len = strlen(url);
+    if (url_len > UINT16_MAX) return ESP_AT_ERR_INVALID_ARG;
+    const int written = snprintf(command, sizeof command,
+                                 "AT+HTTPURLCFG=%u", (unsigned)url_len);
+    if (written <= 0 || written >= (int)sizeof command) {
+        return ESP_AT_ERR_INVALID_ARG;
+    }
+
+    esp_at_client_t *client = esp_at_client_get();
+    client->data_prompt_seen = false;
+    client->http_url_set_result = 0;
+    /* 初始 OK 之后还会出现 '>'；send_only 避免在调用栈上再叠加一份
+       512 字节响应对象，由 prompt 等待逻辑统一消费握手内容。 */
+    esp_at_err_t result = esp_at_cmd_send_only(command, 1000U);
+    if (result != ESP_AT_OK) return result;
+    if (!http_wait_data_prompt(timeout_ms)) return ESP_AT_ERR_TIMEOUT;
+
+    extern esp_at_err_t esp_at_port_uart_transmit(const uint8_t *data,
+                                                   uint16_t size,
+                                                   uint32_t wait_ms);
+    result = esp_at_port_uart_transmit((const uint8_t *)url,
+                                       (uint16_t)url_len, timeout_ms);
+    if (result != ESP_AT_OK) return result;
+
+    const uint32_t start = HAL_GetTick();
+    while ((HAL_GetTick() - start) < timeout_ms) {
+        if (client->http_url_set_result > 0) return ESP_AT_OK;
+        if (client->http_url_set_result < 0) return ESP_AT_ERR_RESP;
+        vTaskDelay(pdMS_TO_TICKS(1U));
+    }
+    return ESP_AT_ERR_TIMEOUT;
+}
 
 // 解析 http://主机[:端口]/路径。
 static esp_at_err_t parse_url(const char *url,
@@ -61,6 +116,7 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
                                  uint32_t timeout_ms)
 {
     if (!url || !resp) return ESP_AT_ERR_INVALID_ARG;
+    memset(resp, 0, sizeof *resp);
     char scheme[8], host[128], path[160];
     if (parse_url(url, scheme, sizeof scheme, host, sizeof host, path, sizeof path)
         != ESP_AT_OK) return ESP_AT_ERR_INVALID_ARG;
@@ -80,14 +136,21 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
     at_cmd_response_t r = {0};
     int n;
 
-// URL 超过 200 字节时可通过 AT+HTTPURLCFG 预存；当前实现直接传入 URL。
-    (void)HTTP_URL_PRESET_THRESHOLD;
+    const bool use_url_preset = strlen(url) > HTTP_URL_PRESET_THRESHOLD;
+    if (use_url_preset) {
+        esp_at_err_t preset_result = http_configure_long_url(url, timeout_ms);
+        if (preset_result != ESP_AT_OK) {
+            LOGW(ESP_AT_HTTP_TAG, "HTTPURLCFG failed: %d", (int)preset_result);
+            return preset_result;
+        }
+    }
+    const char *command_url = use_url_preset ? "" : url;
 
     // ESP-AT 4.1.x HTTPCLIENT：URL 必须使用双引号，否则 AT 解析器会把 : / 当成字段分隔符。
     if (method == ESP_AT_HTTP_GET || method == ESP_AT_HTTP_HEAD) {
         n = snprintf(line, sizeof line,
                      "AT+HTTPCLIENT=%d,%d,\"%s\",,,%d",
-                     (int)method, ct, url, transport);
+                     (int)method, ct, command_url, transport);
     } else if (body && body_len > 0) {
         // data 中的双引号需要转义（\"），否则 AT 解析器会截断字段。
         char escaped[256];
@@ -101,46 +164,53 @@ esp_at_err_t esp_at_http_request(esp_at_http_method_t method,
         escaped[ei] = '\0';
         n = snprintf(line, sizeof line,
                      "AT+HTTPCLIENT=%d,%d,\"%s\",,,%d,\"%s\"",
-                     (int)method, ct, url, transport, escaped);
+                     (int)method, ct, command_url, transport, escaped);
     } else {
         n = snprintf(line, sizeof line,
                      "AT+HTTPCLIENT=%d,%d,\"%s\",,,%d",
-                     (int)method, ct, url, transport);
+                     (int)method, ct, command_url, transport);
     }
     (void)n;
     LOGV(ESP_AT_PROTO_TAG, "<< %s", line);
 
+    esp_at_client_t *client = esp_at_client_get();
+    if (client->http_rx_buf) {
+        vPortFree(client->http_rx_buf);
+    }
+    client->http_rx_buf = (uint8_t *)pvPortMalloc(ESP_AT_HTTP_BODY_MAX + 1U);
+    if (!client->http_rx_buf) return ESP_AT_ERR_NO_MEM;
+    client->http_rx_len = 0U;
+    client->http_rx_overflow = false;
+
     esp_at_err_t e = esp_at_client_send_sync(line, &r, timeout_ms);
+    if (use_url_preset) {
+        /* 清除一次性 URL；返回的 OK 由 rx_task 消费，不需要占用大响应对象。 */
+        (void)esp_at_cmd_send_only("AT+HTTPURLCFG=0", 1000U);
+        vTaskDelay(pdMS_TO_TICKS(20U));
+    }
     if (e != ESP_AT_OK) {
         LOGW(ESP_AT_HTTP_TAG, "HTTPCLIENT failed: %s", r.text);
+        vPortFree(client->http_rx_buf);
+        client->http_rx_buf = NULL;
+        client->http_rx_len = 0U;
         return e;
     }
 
-    // +HTTPCLIENT:<size>,<body>：ESP-AT 只透传 body（状态行和头部已由内部解析），resp->status 保持为 0。
-    // TODO：支持长 body 的多帧拼接。
-    const char *p_hdr = strstr(r.text, "+HTTPCLIENT:");
-    if (p_hdr) {
-        const char *p_sz = p_hdr + strlen("+HTTPCLIENT:");
-        int sz = atoi(p_sz);
-        const char *comma = strchr(p_hdr, ',');
-        const char *body_start = comma ? comma + 1 : NULL;
-        if (sz > 0 && sz < 4096 && body_start) {
-            size_t body_available = (body_start < r.text + r.text_len)
-                ? (size_t)((r.text + r.text_len) - body_start) : 0U;
-            /* 响应文本可能被截断；禁止按声明长度越界读取。 */
-            if ((size_t)sz > body_available) {
-                LOGW(ESP_AT_HTTP_TAG,
-                     "HTTP body truncated: declared=%d available=%u",
-                     sz, (unsigned)body_available);
-                return ESP_AT_ERR_RESP;
-            }
-            resp->body = (uint8_t *)pvPortMalloc((uint16_t)(sz + 1));
-            if (resp->body) {
-                memcpy(resp->body, body_start, (uint16_t)sz);
-                resp->body[sz] = '\0';
-                resp->body_len = (uint16_t)sz;
-            }
-        }
+    if (client->http_rx_overflow) {
+        vPortFree(client->http_rx_buf);
+        client->http_rx_buf = NULL;
+        client->http_rx_len = 0U;
+        return ESP_AT_ERR_NO_MEM;
+    }
+    if (client->http_rx_len > 0U) {
+        client->http_rx_buf[client->http_rx_len] = '\0';
+        resp->body = client->http_rx_buf;
+        resp->body_len = client->http_rx_len;
+        client->http_rx_buf = NULL;
+        client->http_rx_len = 0U;
+    } else {
+        vPortFree(client->http_rx_buf);
+        client->http_rx_buf = NULL;
     }
     resp->elapsed_ms = r.elapsed_ms;
     return ESP_AT_OK;
